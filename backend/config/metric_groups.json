@@ -1,0 +1,56 @@
+{
+    "SAFETY_COLS": [
+        "sqdcp_Hazard_Identification",
+        "sqdcp_Escalation_Criteria_Stated",
+        "sqdcp_Escalation_Decision_Made",
+        "sqdcp_Proactive_Phrasing",
+        "sqdcp_PPE___Compliance_Visibility",
+        "sqdcp_Safety_Coaching_Language",
+        "sqdcp_Emotional_Awareness",
+        "sqdcp_Silence_on_Safety"
+    ],
+    "QUALITY_COLS": [
+        "sqdcp_Clear_Defect_Description",
+        "sqdcp_Root_Cause_Exploration",
+        "sqdcp_Trend_Recognition",
+        "sqdcp_Voice_of_Operator_Reflected",
+        "sqdcp_Turn_Taking_Balance",
+        "sqdcp_Containment_vs__Root_Fix_Split",
+        "sqdcp_Quality_Tradeoff_Framing"
+    ],
+    "DELIVERY_COLS": [
+        "sqdcp_Clear_Deviation_Stated",
+        "sqdcp_Projection_Statement",
+        "sqdcp_Containment_Action_Identified",
+        "sqdcp_Accountability_Assigned",
+        "sqdcp_Escalation_Decision_Made",
+        "sqdcp_Trend_Recognition",
+        "sqdcp_Voice_of_Operator_Reflected",
+        "sqdcp_Voice_of_Customer_Reflected"
+    ],
+    "COST_COLS": [
+        "sqdcp_Scrap_Waste_Acknowledged",
+        "sqdcp_Rework_Time_Stated",
+        "sqdcp_Overtime_Justified_or_Flagged",
+        "sqdcp_Downtime_Cost_Noted",
+        "sqdcp_Labor_Allocation_Awareness",
+        "sqdcp_Material_Waste_Inventory_Excess",
+        "sqdcp_Tool_Equipment_Cost_Impact",
+        "sqdcp_Cost_vs__Risk_Tradeoff_Framing",
+        "sqdcp_Prioritization_Based_on_Cost",
+        "sqdcp_Coaching_Language_on_Efficiency",
+        "sqdcp_Voice_of_Customer_Cost"
+    ],
+    "PEOPLE_COLS": [
+        "sqdcp_Feedback_Quality__Tier_1_2_",
+        "sqdcp_Participation_Inclusivity",
+        "sqdcp_Emotional_Intelligence_in_Language",
+        "sqdcp_Dialogue_Invitation",
+        "sqdcp_Recognition_of_Contributions",
+        "sqdcp_New_Hire_Status_Shared",
+        "sqdcp_Training_Progress_Shared",
+        "sqdcp_Training_Matrix_Awareness",
+        "sqdcp_Mentoring_Support_Mentioned",
+        "sqdcp_Workload_or_Morale_Reflected"
+    ]
+}

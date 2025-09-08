@@ -1,0 +1,338 @@
+{
+    "comm_Pausing": {
+        "original_name": "Pausing",
+        "source_file": "comm_perf/comm_data.csv"
+    },
+    "comm_Verbal_Affirmation": {
+        "original_name": "Verbal Affirmation",
+        "source_file": "comm_perf/comm_data.csv"
+    },
+    "comm_Continuation_Prompts": {
+        "original_name": "Continuation Prompts",
+        "source_file": "comm_perf/comm_data.csv"
+    },
+    "comm_Paraphrasing": {
+        "original_name": "Paraphrasing",
+        "source_file": "comm_perf/comm_data.csv"
+    },
+    "comm_Clarifying_Questions": {
+        "original_name": "Clarifying Questions",
+        "source_file": "comm_perf/comm_data.csv"
+    },
+    "comm_Probing_Questions": {
+        "original_name": "Probing Questions",
+        "source_file": "comm_perf/comm_data.csv"
+    },
+    "comm_Open_Ended_Questions": {
+        "original_name": "Open-Ended Questions",
+        "source_file": "comm_perf/comm_data.csv"
+    },
+    "comm_Coaching_Questions": {
+        "original_name": "Coaching Questions",
+        "source_file": "comm_perf/comm_data.csv"
+    },
+    "comm_Acknowledgment_of_Emotions": {
+        "original_name": "Acknowledgment of Emotions",
+        "source_file": "comm_perf/comm_data.csv"
+    },
+    "comm_Summary_Statements": {
+        "original_name": "Summary Statements",
+        "source_file": "comm_perf/comm_data.csv"
+    },
+    "feedback_Timely": {
+        "original_name": "Timely",
+        "source_file": "feedback/feedback_data.csv"
+    },
+    "feedback_Neutral___Specific": {
+        "original_name": "Neutral & Specific",
+        "source_file": "feedback/feedback_data.csv"
+    },
+    "feedback_Impact___Emotion": {
+        "original_name": "Impact + Emotion",
+        "source_file": "feedback/feedback_data.csv"
+    },
+    "feedback_Action_Oriented": {
+        "original_name": "Action-Oriented",
+        "source_file": "feedback/feedback_data.csv"
+    },
+    "feedback_Clarity_of_Situation": {
+        "original_name": "Clarity of Situation",
+        "source_file": "feedback/feedback_data.csv"
+    },
+    "feedback_Feedback_for_Reinforcement": {
+        "original_name": "Feedback for Reinforcement",
+        "source_file": "feedback/feedback_data.csv"
+    },
+    "feedback_Feedback_for_Improvement": {
+        "original_name": "Feedback for Improvement",
+        "source_file": "feedback/feedback_data.csv"
+    },
+    "feedback__I____Sensory_Statements": {
+        "original_name": "\"I\" + Sensory Statements",
+        "source_file": "feedback/feedback_data.csv"
+    },
+    "feedback_Objective_Framing": {
+        "original_name": "Objective Framing",
+        "source_file": "feedback/feedback_data.csv"
+    },
+    "feedback_Avoids_Mind_Reading": {
+        "original_name": "Avoids Mind Reading",
+        "source_file": "feedback/feedback_data.csv"
+    },
+    "feedback_Behavior___Pattern_Awareness": {
+        "original_name": "Behavior + Pattern Awareness",
+        "source_file": "feedback/feedback_data.csv"
+    },
+    "feedback_Invites_Dialogue": {
+        "original_name": "Invites Dialogue",
+        "source_file": "feedback/feedback_data.csv"
+    },
+    "deviation_Current_Target": {
+        "original_name": "Current Target",
+        "source_file": "deviation_data.csv"
+    },
+    "deviation_Deviation_from_Target": {
+        "original_name": "Deviation from Target",
+        "source_file": "deviation_data.csv"
+    },
+    "deviation_Process_Location___Impact": {
+        "original_name": "Process Location & Impact",
+        "source_file": "deviation_data.csv"
+    },
+    "deviation_Reason_for_Deviation___Why__": {
+        "original_name": "Reason for Deviation (\u201cWhy\u201d)",
+        "source_file": "deviation_data.csv"
+    },
+    "deviation_Standard_Confirmation": {
+        "original_name": "Standard Confirmation",
+        "source_file": "deviation_data.csv"
+    },
+    "deviation_Containment___Short_Term_Fix": {
+        "original_name": "Containment / Short-Term Fix",
+        "source_file": "deviation_data.csv"
+    },
+    "deviation_Actions_Taken_to_Understand_Deviation": {
+        "original_name": "Actions Taken to Understand Deviation",
+        "source_file": "deviation_data.csv"
+    },
+    "deviation_Trend_Recognition": {
+        "original_name": "Trend Recognition",
+        "source_file": "deviation_data.csv"
+    },
+    "deviation_Decision_Made": {
+        "original_name": "Decision Made",
+        "source_file": "deviation_data.csv"
+    },
+    "deviation_Define_Next_Actions": {
+        "original_name": "Define Next Actions",
+        "source_file": "deviation_data.csv"
+    },
+    "deviation_Report_Back_Plan": {
+        "original_name": "Report Back Plan",
+        "source_file": "deviation_data.csv"
+    },
+    "deviation_Follow_Up_on_Open_Actions": {
+        "original_name": "Follow-Up on Open Actions",
+        "source_file": "deviation_data.csv"
+    },
+    "deviation_Preventive_Action___System_Fix": {
+        "original_name": "Preventive Action / System Fix",
+        "source_file": "deviation_data.csv"
+    },
+    "deviation_Spillover___Risk_Awareness": {
+        "original_name": "Spillover / Risk Awareness",
+        "source_file": "deviation_data.csv"
+    },
+    "deviation_Operator_Voice_Acknowledged": {
+        "original_name": "Operator Voice Acknowledged",
+        "source_file": "deviation_data.csv"
+    },
+    "deviation_Summary___Prioritization_of_Issues": {
+        "original_name": "Summary & Prioritization of Issues",
+        "source_file": "deviation_data.csv"
+    },
+    "deviation_Go_See__Gemba_Walk_": {
+        "original_name": "Go&See (Gemba Walk)",
+        "source_file": "deviation_data.csv"
+    },
+    "sqdcp_Hazard_Identification": {
+        "original_name": "Hazard Identification",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Escalation_Criteria_Stated": {
+        "original_name": "Escalation Criteria Stated",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Escalation_Decision_Made": {
+        "original_name": "Escalation Decision Made",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Proactive_Phrasing": {
+        "original_name": "Proactive Phrasing",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_PPE___Compliance_Visibility": {
+        "original_name": "PPE & Compliance Visibility",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Safety_Coaching_Language": {
+        "original_name": "Safety Coaching Language",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Emotional_Awareness": {
+        "original_name": "Emotional Awareness",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Silence_on_Safety": {
+        "original_name": "Silence on Safety",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Clear_Defect_Description": {
+        "original_name": "Clear Defect Description",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Root_Cause_Exploration": {
+        "original_name": "Root Cause Exploration",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Trend_Recognition": {
+        "original_name": "Trend Recognition",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Voice_of_Operator_Reflected": {
+        "original_name": "Voice of Operator Reflected",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Turn_Taking_Balance": {
+        "original_name": "Turn-Taking Balance",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Containment_vs__Root_Fix_Split": {
+        "original_name": "Containment vs. Root Fix Split",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Quality_Tradeoff_Framing": {
+        "original_name": "Quality Tradeoff Framing",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Clear_Deviation_Stated": {
+        "original_name": "Clear Deviation Stated",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Projection_Statement": {
+        "original_name": "Projection Statement",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Proactive_Phrasing_1": {
+        "original_name": "Proactive Phrasing.1",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Containment_Action_Identified": {
+        "original_name": "Containment Action Identified",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Accountability_Assigned": {
+        "original_name": "Accountability Assigned",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Escalation_Decision_Made_1": {
+        "original_name": "Escalation Decision Made.1",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Trend_Recognition_1": {
+        "original_name": "Trend Recognition.1",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Voice_of_Operator_Reflected_1": {
+        "original_name": "Voice of Operator Reflected.1",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Voice_of_Customer_Reflected": {
+        "original_name": "Voice of Customer Reflected",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Scrap_Waste_Acknowledged": {
+        "original_name": "Scrap/Waste Acknowledged",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Rework_Time_Stated": {
+        "original_name": "Rework Time Stated",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Overtime_Justified_or_Flagged": {
+        "original_name": "Overtime Justified or Flagged",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Downtime_Cost_Noted": {
+        "original_name": "Downtime Cost Noted",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Labor_Allocation_Awareness": {
+        "original_name": "Labor Allocation Awareness",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Material_Waste_Inventory_Excess": {
+        "original_name": "Material Waste/Inventory Excess",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Tool_Equipment_Cost_Impact": {
+        "original_name": "Tool/Equipment Cost Impact",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Cost_vs__Risk_Tradeoff_Framing": {
+        "original_name": "Cost vs. Risk Tradeoff Framing",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Prioritization_Based_on_Cost": {
+        "original_name": "Prioritization Based on Cost",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Coaching_Language_on_Efficiency": {
+        "original_name": "Coaching Language on Efficiency",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Voice_of_Customer_Cost": {
+        "original_name": "Voice of Customer Cost",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Feedback_Quality__Tier_1_2_": {
+        "original_name": "Feedback Quality (Tier 1/2)",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Participation_Inclusivity": {
+        "original_name": "Participation Inclusivity",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Emotional_Intelligence_in_Language": {
+        "original_name": "Emotional Intelligence in Language",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Dialogue_Invitation": {
+        "original_name": "Dialogue Invitation",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Recognition_of_Contributions": {
+        "original_name": "Recognition of Contributions",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_New_Hire_Status_Shared": {
+        "original_name": "New Hire Status Shared",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Training_Progress_Shared": {
+        "original_name": "Training Progress Shared",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Training_Matrix_Awareness": {
+        "original_name": "Training Matrix Awareness",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Mentoring_Support_Mentioned": {
+        "original_name": "Mentoring/Support Mentioned",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sqdcp_Workload_or_Morale_Reflected": {
+        "original_name": "Workload or Morale Reflected",
+        "source_file": "sqdcp/SQDCP_Data.csv"
+    }
+}

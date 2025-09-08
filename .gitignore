@@ -1,0 +1,56 @@
+# Environments
+.env
+*.env
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Data files
+*.csv
+*.xlsx
+*.db
+*.pdf
+*.docx
+
+# Model files
+*.pth
+*.safetensors
+/bert_classification/results_multilabel/
+/bert_classification/sa_bert_model_multilabel/
+/bert_classification/logs_multilabel/
+/bert_classification/bert_training_stats.txt
+/bert_classification/final_meeting_bert_analysis.csv
+/bert_classification/master_training_data_deduplicated.csv
+/bert_classification/master_training_data.csv
+/bert_classification/predicted_bert_sa_category.csv
+/bert_classification/test_analysis.csv
+/bert_classification/training_data.csv
+
+
+# TF-IDF
+/tf-idf/deviation_data.csv
+/tf-idf/predicted_comm_perf_2.csv
+/tf-idf/predicted_deviation_behavior.csv
+/tf-idf/predicted_sa_events_3.csv
+
+/tf-idf/comm_perf/comm_data.csv
+/tf-idf/comm_perf/predicted_comm_perf.csv
+
+/tf-idf/feedback/feedback_data.csv
+/tf-idf/feedback/predicted_feedback_behavior.csv
+
+/tf-idf/sqdcp/predicted_sqdcp.csv
+/tf-idf/sqdcp/SQDCP_Data.csv
+
+
+# Other
+predicted_comm_perf.csv
+predicted_sa_events_2.csv
+predicted_sa_events.csv
+qualitative_report.txt
+quantitative_report.txt
+level1_correlation_heatmap.png
+/sia_msg_count_freq/analysis_summary.txt
+/sia_msg_count_freq/final_communication_analysis.csv
+/sia_msg_count_freq/speaker_sentiment_trends.png
