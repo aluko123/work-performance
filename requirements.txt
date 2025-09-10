@@ -10,6 +10,7 @@ openai
 openpyxl
 unstructured[pdf,xlsx]
 SQLAlchemy
+chunkr_ai
 langchain
 langchain-community
 langchain-openai

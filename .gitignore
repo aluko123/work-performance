@@ -54,3 +54,6 @@ level1_correlation_heatmap.png
 /sia_msg_count_freq/analysis_summary.txt
 /sia_msg_count_freq/final_communication_analysis.csv
 /sia_msg_count_freq/speaker_sentiment_trends.png
+
+#db
+/data

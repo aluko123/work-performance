@@ -1,28 +1,32 @@
 import pandas as pd
 import torch
 import json
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import os
+import tempfile
 from openai import AsyncOpenAI
 from sqlalchemy.orm import Session
 from typing import List
-from .rag_service import PerformanceRAG
-from .services import get_all_utterances
-from .models  import RAGQuery
+
+
 
 # Local imports
 from . import db_models
 from .database import SessionLocal, init_db
-from .models import Analysis as AnalysisModel, MultiTaskBertModel, TrendsResponse
-from .services import analyze_structured_transcript, save_analysis_results, get_speaker_trends
-from .parsing import (
-    parse_document_with_unstructured, 
-    extract_transcript_single_shot, 
-    extract_transcript_chunking
-)
-from transformers import BertTokenizer
+from .models import Analysis as AnalysisModel, MultiTaskBertModel, TrendsResponse, RAGQuery
+from .services import analyze_structured_transcript, save_analysis_results, get_speaker_trends, get_all_utterances
+from .document_extractor import RobustMeetingExtractor
+from .rag_service import PerformanceRAG
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
+# from .parsing import (
+#     parse_document_with_unstructured, 
+#     extract_transcript_single_shot, 
+#     extract_transcript_chunking
+# )
+
 
 # --- Configuration ---
 MODEL_PATH = os.getenv('MODEL_PATH', 'bert_classification/multi_task_bert_model.pth')
@@ -46,6 +50,8 @@ def get_db():
 async def lifespan(app: FastAPI):
     print("Loading model and configuration...")
     init_db()  # Initialize database and create tables
+    
+    
     # Load local models and configs
     df = pd.read_csv(DATA_PATH)
     ml_models["metric_cols"] = [col for col in df.columns if col.startswith(('comm_', 'feedback_', 'deviation_', 'sqdcp_'))]
@@ -54,7 +60,7 @@ async def lifespan(app: FastAPI):
     model.load_state_dict(torch.load(MODEL_PATH, map_location=torch.device('cpu')))
     model.eval()
     ml_models["model"] = model
-    ml_models["tokenizer"] = BertTokenizer.from_pretrained('bert-base-uncased')
+    ml_models["tokenizer"] = AutoTokenizer.from_pretrained('bert-base-uncased')
 
     print("Loading SA model...")
     ml_models["sa_tokenizer"] = AutoTokenizer.from_pretrained(SA_MODEL_PATH)
@@ -68,17 +74,24 @@ async def lifespan(app: FastAPI):
     with open(CONFIG_PATH, 'r') as f:
         ml_models["metric_groups"] = json.load(f)
 
-    # Configure OpenAI client
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        print("WARNING: OPENAI_API_KEY environment variable not set.")
-    ml_models["openai_client"] = AsyncOpenAI(api_key=api_key)
 
-    # Configure parsing strategy
-    ml_models["parsing_strategy"] = os.getenv("PARSING_STRATEGY", "single_shot")
-    print(f"Using parsing strategy: {ml_models['parsing_strategy']}")
+    # Configure OpenAI and Chunkr clients
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    chunkr_api_key = os.getenv("CHUNKRAI_API_KEY")
+    if not openai_api_key or not chunkr_api_key:
+        print("WARNING: OPENAI_API_KEY or CHUNKR_API_KEY environment variables not set.")
+    
 
-    print("Model and configuration loaded successfully.")
+    openai_client =AsyncOpenAI(api_key=openai_api_key)
+    ml_models["openai_client"] = openai_client
+
+    # # Configure parsing strategy
+    # ml_models["parsing_strategy"] = os.getenv("PARSING_STRATEGY", "single_shot")
+    # print(f"Using parsing strategy: {ml_models['parsing_strategy']}")
+
+    ml_models["extractor"] = RobustMeetingExtractor(chunkr_api_key=chunkr_api_key, openai_client=openai_client)
+
+    print("Document extractor initialized.")
 
 
     #---RAG Service Init---
@@ -123,16 +136,38 @@ app.add_middleware(
 # --- API Endpoints ---
 @app.post("/analyze_text/", response_model=AnalysisModel)
 async def analyze_text_endpoint(text_file: UploadFile = File(...), db: Session = Depends(get_db)):
-    contents = await text_file.read()
-    raw_text = parse_document_with_unstructured(contents, text_file.content_type)
-    if not raw_text.strip():
-        raise HTTPException(status_code=422, detail="Could not extract any text from the provided file.")
+    # Use a temporary file to store the upload, as the new extractor works with file paths
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{text_file.filename}") as tmp:
+            contents = await text_file.read()
+            tmp.write(contents)
+            tmp_path = tmp.name
+        
+        print(f"Temporarily saved uploaded file to {tmp_path}")
     
-    strategy = ml_models.get("parsing_strategy", "single_shot")
-    if strategy == "chunking":
-        structured_transcript = await extract_transcript_chunking(raw_text, ml_models["openai_client"])
-    else:
-        structured_transcript = await extract_transcript_single_shot(raw_text, ml_models["openai_client"])
+        # Use extractor
+        extractor: RobustMeetingExtractor = ml_models["extractor"]
+        extraction_result = await extractor.process_any_document(tmp_path, text_file.filename)
+        structured_transcript = extraction_result.get("extractions", [])
+    
+    finally:
+        # Clean up the temporary file
+        if 'tmp_path' in locals() and os.path.exists(tmp_path):
+            os.remove(tmp_path)
+            print(f"Cleaned up temporary file: {tmp_path}")
+
+            
+    #raw_text = parse_document_with_unstructured(contents, text_file.content_type)
+    
+    
+    # if not raw_text.strip():
+    #     raise HTTPException(status_code=422, detail="Could not extract any text from the provided file.")
+    
+    # strategy = ml_models.get("parsing_strategy", "single_shot")
+    # if strategy == "chunking":
+    #     structured_transcript = await extract_transcript_chunking(raw_text, ml_models["openai_client"])
+    # else:
+    #     structured_transcript = await extract_transcript_single_shot(raw_text, ml_models["openai_client"])
 
     if not structured_transcript:
         raise HTTPException(status_code=422, detail="The AI model could not extract a valid transcript from the document.")
@@ -141,6 +176,8 @@ async def analyze_text_endpoint(text_file: UploadFile = File(...), db: Session =
         transcript=structured_transcript,
         model=ml_models["model"],
         tokenizer=ml_models["tokenizer"],
+        sa_model=ml_models["sa_model"],
+        sa_tokenizer=ml_models["sa_tokenizer"],
         metric_cols=ml_models["metric_cols"],
         metric_groups=ml_models["metric_groups"]
     )
@@ -154,7 +191,7 @@ async def analyze_text_endpoint(text_file: UploadFile = File(...), db: Session =
 
     rag_service: PerformanceRAG = ml_models.get("rag_service")
     if rag_service:
-        rag_service.index_utterances(db.analysis.utterances)
+        rag_service.index_utterances(db_analysis.utterances)
 
     return db_analysis
 

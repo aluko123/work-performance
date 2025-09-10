@@ -9,7 +9,7 @@ from . import db_models
 
 
 class PerformanceRAG:
-    def __init__(self, persist_directory: str = "./chroma_db"):
+    def __init__(self, persist_directory: str = "./data/chroma_db"):
         self.embeddings = OpenAIEmbeddings()
 
         self.vector_store =  Chroma(
@@ -18,7 +18,7 @@ class PerformanceRAG:
         )
 
         self.qa_chain = RetrievalQA.from_chain_type(
-            llm=ChatOpenAI(model_name="gpt-40-mini"),
+            llm=ChatOpenAI(model_name="gpt-4o-mini"),
             chain_type="stuff",
             retriever=self.vector_store.as_retriever(search_kwargs={"k": 5}),
             return_source_documents=True
@@ -36,14 +36,19 @@ class PerformanceRAG:
         documents = []
         for utterance in utterances:
             scores_text = str({**utterance.predictions, **utterance.aggregated_scores})
-
+            page_content = (
+                f"On {utterance.date} at {utterance.timestamp}, {utterance.speaker} said: "
+                f"'{utterance.text}'\\n"
+                f"The scores for this utterance were: {scores_text}"
+            )
+            
             doc = Document(
-                page_content=utterance.text,
+                page_content=page_content,
                 metadata={
                     "speaker": utterance.speaker,
                     "date": utterance.date,
                     "timestamp": utterance.timestamp,
-                    "scores": scores_text,
+                    #"scores": scores_text,
                     "source_id": utterance.id #store original DB for reference
                 }
             
@@ -51,7 +56,7 @@ class PerformanceRAG:
             documents.append(doc)
 
         self.vector_store.add_documents(documents)
-        print(f"Indexed {len(documents)} utterances.")
+        print(f"Indexed {len(documents)} new utterances with rich content.")
 
 
     def query_insights(self, question):

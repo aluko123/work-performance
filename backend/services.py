@@ -4,37 +4,6 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, cast, JSON
 from sqlalchemy.sql.expression import case
 from . import db_models
-from datetime import datetime
-
-def _parse_date(date_str: str) -> str | None:
-    """Parses a date string from common formats into YYYY-MM-DD."""
-    if not date_str or not isinstance(date_str, str):
-        return None
-    # Add more formats here if the AI returns different ones
-    for fmt in ("%A, %B %d, %Y", "%B %d, %Y", "%b %d, %Y", "%m/%d/%Y"):
-        try:
-            return datetime.strptime(date_str, fmt).strftime("%Y-%m-%d")
-        except ValueError:
-            continue
-    try:
-        datetime.strptime(date_str, "%Y-%m-%d")
-        return date_str
-    except ValueError:
-        pass
-    print(f"Warning: Could not parse date string: {date_str}")
-    return date_str
-
-def _parse_time(time_str: str) -> str | None:
-    """Parses a time string from common formats into HH:MM:SS."""
-    if not time_str or not isinstance(time_str, str):
-        return None
-    for fmt in ("%I:%M:%S %p", "%I:%M %p", "%H:%M:%S", "%H:%M"):
-        try:
-            return datetime.strptime(time_str, fmt).strftime("%H:%M:%S")
-        except ValueError:
-            continue
-    print(f"Warning: Could not parse time string: {time_str}")
-    return time_str
 
 def predict_all_scores(text: str, model, tokenizer, metric_cols: List[str]) -> Dict[str, int]:
     inputs = tokenizer(
@@ -42,7 +11,7 @@ def predict_all_scores(text: str, model, tokenizer, metric_cols: List[str]) -> D
         return_tensors='pt',
         padding=True,
         truncation=True,
-        max_length=128
+        max_length=512
     )
     with torch.no_grad():
         outputs = model(**inputs)
@@ -53,7 +22,31 @@ def predict_all_scores(text: str, model, tokenizer, metric_cols: List[str]) -> D
         predictions[col_name] = pred_index + 1
     return predictions
 
-def analyze_structured_transcript(transcript: List[Dict[str, Any]], model, tokenizer, metric_cols: List[str], metric_groups: Dict[str, List[str]]) -> List[Dict[str, Any]]:
+def predict_sa_labels(text, model, tokenizer) -> List[str]:
+    """
+    predicts situational awareness (SA) lables for a given text using a multi-label classification model
+    """
+    inputs = tokenizer(
+        text,
+        return_tensors="pt",
+        truncation=True,
+        padding=True,
+        max_length=512
+    )
+
+    with torch.no_grad():
+        outputs = model(**inputs)
+        logits = outputs.logits
+    
+    probabilities = torch.sigmoid(logits).squeeze()
+    # 0.5 threshold to determine "on" labels
+    predictions = (probabilities > 0.5).nonzero(as_tuple=True)[0]
+
+    predicted_labels = [model.config.id2label[idx.item()] for idx in predictions]
+
+    return predicted_labels
+
+def analyze_structured_transcript(transcript: List[Dict[str, Any]], model, tokenizer, sa_model, sa_tokenizer, metric_cols: List[str], metric_groups: Dict[str, List[str]]) -> List[Dict[str, Any]]:
     """
     Analyzes structured transcript by running the BERT model on each utterance
     and using a dynamic configuration for scoring.
@@ -61,12 +54,16 @@ def analyze_structured_transcript(transcript: List[Dict[str, Any]], model, token
     print("Analyzing structured transcript with BERT model...")
     results = []
     for item in transcript:
-        # Normalize keys to lowercase for consistent access
-        item_lower = {k.lower(): v for k, v in item.items()}
-        utterance_text = item_lower.get('utterance', '')
+        # The extractor now provides pre-formatted, lowercased keys.
+        utterance_text = item.get('utterance', '')
         if utterance_text:
+
+            #analyze number metrics for utterances
             predicted_scores = predict_all_scores(utterance_text, model, tokenizer, metric_cols)
             
+            #analyze SA category for utterances
+            sa_labels = predict_sa_labels(utterance_text, sa_model, sa_tokenizer)
+
             aggregated_scores = {}
             for group_name, metric_list in metric_groups.items():
                 total_score = sum(predicted_scores.get(metric, 0) for metric in metric_list)
@@ -81,17 +78,11 @@ def analyze_structured_transcript(transcript: List[Dict[str, Any]], model, token
             aggregated_scores['Feedback_Tier1_Score'] = sum(predicted_scores.get(dim, 0) for dim in FEEDBACK_DIMS[:6])
             aggregated_scores['Feedback_Tier2_Score'] = sum(predicted_scores.get(dim, 0) for dim in FEEDBACK_DIMS[6:])
 
-            
-
-            processed_item = {
-                "date": _parse_date(item_lower.get("date")),
-                "timestamp": _parse_time(item_lower.get("timestamp")),
-                "speaker": item_lower.get("speaker"),
-                "utterance": utterance_text,
-                "predictions": predicted_scores,
-                "aggregated_scores": aggregated_scores
-            }
-            results.append(processed_item)
+            # item already contains standardized date, timestamp, speaker, utterance
+            item['predictions'] = predicted_scores
+            item['aggregated_scores'] = aggregated_scores
+            item['sa_labels'] = sa_labels
+            results.append(item)
 
     return results
 
@@ -101,16 +92,16 @@ def save_analysis_results(db: Session, filename: str, results: List[Dict[str, An
     db.flush()
 
     for res in results:
-        # Ensure keys are lowercase before saving to prevent case-sensitivity issues.
-        res_lower = {k.lower(): v for k, v in res.items()}
+        # The extractor and analysis functions now provide clean, lowercase keys.
         db_utterance = db_models.Utterance(
             analysis_id=db_analysis.id,
-            date=res_lower.get("date"),
-            timestamp=res_lower.get("timestamp"),
-            speaker=res_lower.get("speaker"),
-            text=res_lower.get("utterance"),
-            predictions=res_lower.get("predictions"),
-            aggregated_scores=res_lower.get("aggregated_scores")
+            date=res.get("date"),
+            timestamp=res.get("timestamp"),
+            speaker=res.get("speaker"),
+            text=res.get("utterance"),
+            predictions=res.get("predictions"),
+            aggregated_scores=res.get("aggregated_scores"),
+            sa_labels=res.get("sa_labels")
         )
         db.add(db_utterance)
     
@@ -121,7 +112,6 @@ def save_analysis_results(db: Session, filename: str, results: List[Dict[str, An
 
 def get_all_utterances(db: Session) -> List[db_models.Utterance]:
     return db.query(db_models.Utterance).all()
-
 
 
 def get_speaker_trends(db: Session, metric: str, period: str):

@@ -126,7 +126,7 @@ document.addEventListener('DOMContentLoaded', () => {
         ragResultText.textContent = 'Thinking...';
         ragResultContainer.style.display = 'block';
 
-        fetch(`${API_BASE_URL}/get_insights/`, {
+        fetch(`${API_BASE_URL}/api/get_insights`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
