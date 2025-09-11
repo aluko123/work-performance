@@ -137,6 +137,7 @@ app.add_middleware(
 @app.post("/analyze_text/", response_model=AnalysisModel)
 async def analyze_text_endpoint(text_file: UploadFile = File(...), db: Session = Depends(get_db)):
     # Use a temporary file to store the upload, as the new extractor works with file paths
+    tmp_path = None
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{text_file.filename}") as tmp:
             contents = await text_file.read()
@@ -152,7 +153,7 @@ async def analyze_text_endpoint(text_file: UploadFile = File(...), db: Session =
     
     finally:
         # Clean up the temporary file
-        if 'tmp_path' in locals() and os.path.exists(tmp_path):
+        if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
             print(f"Cleaned up temporary file: {tmp_path}")
 

@@ -1,4 +1,5 @@
 import os
+import asyncio
 from langchain.vectorstores import Chroma
 from langchain.embeddings import OpenAIEmbeddings
 from langchain.chat_models import ChatOpenAI
@@ -54,9 +55,35 @@ class PerformanceRAG:
             
             )
             documents.append(doc)
+        if not documents:
+            return
+        
+        #BATCH IN PARALLEL FOR EMBEDDING PURPOSES
+        batch_size = int(os.getenv("BATCH_SIZE", 50))
+        total_docs = len(documents)
+        print(f"Starting to index {total_docs} documents in parallel batches of {batch_size}...")
 
-        self.vector_store.add_documents(documents)
-        print(f"Indexed {len(documents)} new utterances with rich content.")
+        #tasks = []
+        for i in range(0, total_docs, batch_size):
+            batch = documents[i:i + batch_size]
+            # async task for each batch
+            # task = asyncio.create_task(self.vector_store.add_documents(batch))
+            # tasks.append(task)
+            try:
+                self.vector_store.add_documents(batch)
+                print(f"Successfully indexed batch {i//batch_size + 1}/{(total_docs + batch_size - 1)//batch_size}...")
+            except Exception as e:
+                print(f"An error occurred during batch indexing: {e}")
+                continue
+        
+        # #run concurrently
+        # if tasks:
+        #     await asyncio.gather(*tasks)
+
+        print(f"Finished indexing {total_docs} utterances.")
+
+        # self.vector_store.add_documents(documents)
+        # print(f"Indexed {len(documents)} new utterances with rich content.")
 
 
     def query_insights(self, question):
