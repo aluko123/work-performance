@@ -318,5 +318,9 @@
     "sqdcp_Workload_or_Morale_Reflected": {
         "original_name": "Workload or Morale Reflected",
         "source_file": "sqdcp/SQDCP_Data.csv"
+    },
+    "sa_labels": {
+        "original_name": "Situational Awareness Categories",
+        "source_file": "n/a"
     }
 }

@@ -26,6 +26,15 @@ def predict_sa_labels(text, model, tokenizer) -> List[str]:
     """
     predicts situational awareness (SA) lables for a given text using a multi-label classification model
     """
+    
+    # Define the mapping from generic labels to meaningful names
+    label_mapping = {
+        "LABEL_0": "Perception",
+        "LABEL_1": "Comprehension",
+        "LABEL_2": "Projection",
+        "LABEL_3": "Action"
+    }
+
     inputs = tokenizer(
         text,
         return_tensors="pt",
@@ -42,7 +51,11 @@ def predict_sa_labels(text, model, tokenizer) -> List[str]:
     # 0.5 threshold to determine "on" labels
     predictions = (probabilities > 0.5).nonzero(as_tuple=True)[0]
 
-    predicted_labels = [model.config.id2label[idx.item()] for idx in predictions]
+    # First, get the generic labels from the model's config
+    generic_labels = [model.config.id2label[idx.item()] for idx in predictions]
+    
+    # Then, map the generic labels to the meaningful names
+    predicted_labels = [label_mapping.get(label, label) for label in generic_labels]
 
     return predicted_labels
 

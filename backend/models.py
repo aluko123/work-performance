@@ -16,9 +16,10 @@ class Utterance(BaseModel):
     text: str | None
     predictions: Dict[str, Any]
     aggregated_scores: Dict[str, Any]
+    sa_labels: List[str] | None
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class Analysis(BaseModel):
     id: int
@@ -27,7 +28,7 @@ class Analysis(BaseModel):
     utterances: List[Utterance] = []
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class AnalysisResult(BaseModel):
     Date: str | None
@@ -50,9 +51,9 @@ class TrendsResponse(BaseModel):
 
 # --- Model Definition ---
 class MultiTaskBertModel(nn.Module):
-    def __init__(self, n_classes_dict):
+    def __init__(self, n_classes_dict, bert_model):
         super(MultiTaskBertModel, self).__init__()
-        self.bert = BertModel.from_pretrained('bert-base-uncased')
+        self.bert = bert_model
         self.classifiers = nn.ModuleDict({
             task_name: nn.Linear(self.bert.config.hidden_size, num_labels)
             for task_name, num_labels in n_classes_dict.items()
