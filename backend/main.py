@@ -9,6 +9,7 @@ import tempfile
 from openai import AsyncOpenAI
 from sqlalchemy.orm import Session
 from typing import List
+from transformers import BertModel
 
 
 
@@ -56,7 +57,11 @@ async def lifespan(app: FastAPI):
     df = pd.read_csv(DATA_PATH)
     ml_models["metric_cols"] = [col for col in df.columns if col.startswith(('comm_', 'feedback_', 'deviation_', 'sqdcp_'))]
     n_classes = {col: 5 for col in ml_models["metric_cols"]}
-    model = MultiTaskBertModel(n_classes)
+
+    # Load the base BERT model once
+    base_bert_model = BertModel.from_pretrained('bert-base-uncased')
+    
+    model = MultiTaskBertModel(n_classes, base_bert_model)
     model.load_state_dict(torch.load(MODEL_PATH, map_location=torch.device('cpu')))
     model.eval()
     ml_models["model"] = model

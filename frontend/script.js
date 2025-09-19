@@ -244,11 +244,23 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!utterances || utterances.length === 0) return;
 
         const firstUtterance = utterances[0];
-        const headers = ['date', 'timestamp', 'speaker', 'text', ...Object.keys(firstUtterance.predictions).sort(), ...Object.keys(firstUtterance.aggregated_scores).sort()];
+        
+        const predictionKeys = Object.keys(firstUtterance.predictions)
+            .filter(key => !key.endsWith('.1') && !key.endsWith('_1'));
+            
+        const aggregatedKeys = Object.keys(firstUtterance.aggregated_scores)
+            .filter(key => !key.endsWith('.1') && !key.endsWith('_1'));
+
+        const headers = ['date', 'timestamp', 'speaker', 'text', 'sa_labels', ...predictionKeys.sort(), ...aggregatedKeys.sort()];
+        
         const headerRow = document.createElement('tr');
         headers.forEach(header => {
             const th = document.createElement('th');
-            th.textContent = getDisplayName(header);
+            if (header === 'sa_labels') {
+                th.textContent = 'Situational Awareness Categories';
+            } else {
+                th.textContent = getDisplayName(header);
+            }
             headerRow.appendChild(th);
         });
         resultsThead.appendChild(headerRow);
@@ -257,7 +269,12 @@ document.addEventListener('DOMContentLoaded', () => {
             const tr = document.createElement('tr');
             headers.forEach(header => {
                 const td = document.createElement('td');
-                let value = utterance[header] ?? utterance.aggregated_scores[header] ?? utterance.predictions[header] ?? 'N/A';
+                let value;
+                if (header === 'sa_labels') {
+                    value = utterance.sa_labels ? utterance.sa_labels.join(', ') : 'N/A';
+                } else {
+                    value = utterance[header] ?? utterance.aggregated_scores[header] ?? utterance.predictions[header] ?? 'N/A';
+                }
                 td.textContent = value;
                 tr.appendChild(td);
             });
