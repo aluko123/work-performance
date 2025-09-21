@@ -28,6 +28,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const ragQueryButton = document.getElementById('ragQueryButton');
     const ragResultContainer = document.getElementById('ragResultContainer');
     const ragResultText = document.getElementById('ragResultText');
+    const ragResultBullets = document.getElementById('ragResultBullets');
+    const ragResultCitations = document.getElementById('ragResultCitations');
+    const ragResultMetrics = document.getElementById('ragResultMetrics');
+    const ragResultFollowUps = document.getElementById('ragResultFollowUps');
 
 
     // --- Constants ---
@@ -125,6 +129,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         ragResultText.textContent = 'Thinking...';
         ragResultContainer.style.display = 'block';
+        if (ragResultBullets) ragResultBullets.innerHTML = '';
+        if (ragResultCitations) ragResultCitations.innerHTML = '';
+        if (ragResultMetrics) ragResultMetrics.innerHTML = '';
+        if (ragResultFollowUps) ragResultFollowUps.innerHTML = '';
 
         fetch(`${API_BASE_URL}/api/get_insights`, {
             method: 'POST',
@@ -140,7 +148,73 @@ document.addEventListener('DOMContentLoaded', () => {
             return response.json();
         })
         .then(data => {
-            ragResultText.textContent = data.answer;
+            // Answer
+            ragResultText.textContent = data.answer || 'No answer produced.';
+
+            // Bullets
+            if (Array.isArray(data.bullets) && ragResultBullets) {
+                ragResultBullets.innerHTML = '';
+                data.bullets.forEach((b) => {
+                    const li = document.createElement('li');
+                    li.textContent = b;
+                    ragResultBullets.appendChild(li);
+                });
+            }
+
+            // Citations
+            if (Array.isArray(data.citations) && ragResultCitations) {
+                ragResultCitations.innerHTML = '';
+                data.citations.forEach((c) => {
+                    const wrapper = document.createElement('div');
+                    wrapper.style.border = '1px solid #eee';
+                    wrapper.style.padding = '8px';
+                    wrapper.style.borderRadius = '6px';
+                    wrapper.style.marginBottom = '6px';
+
+                    const meta = [c.speaker, c.date, c.timestamp].filter(Boolean).join(' • ');
+                    const metaEl = document.createElement('div');
+                    metaEl.style.fontSize = '0.9em';
+                    metaEl.style.color = '#555';
+                    metaEl.textContent = meta || 'Citation';
+
+                    const snippetEl = document.createElement('div');
+                    snippetEl.style.marginTop = '4px';
+                    snippetEl.textContent = c.snippet || '';
+
+                    wrapper.appendChild(metaEl);
+                    wrapper.appendChild(snippetEl);
+                    ragResultCitations.appendChild(wrapper);
+                });
+            }
+
+            // Metrics summary (flexible handling of strings or objects)
+            if (Array.isArray(data.metrics_summary) && ragResultMetrics) {
+                ragResultMetrics.innerHTML = '';
+                data.metrics_summary.forEach((m) => {
+                    const line = document.createElement('div');
+                    line.style.border = '1px dashed #e5e7eb';
+                    line.style.padding = '6px';
+                    line.style.borderRadius = '6px';
+                    line.style.marginBottom = '6px';
+                    if (m && typeof m === 'object') {
+                        const pairs = Object.entries(m).map(([k, v]) => `${k}: ${v}`).join(' • ');
+                        line.textContent = pairs || JSON.stringify(m);
+                    } else {
+                        line.textContent = String(m);
+                    }
+                    ragResultMetrics.appendChild(line);
+                });
+            }
+
+            // Follow-ups
+            if (Array.isArray(data.follow_ups) && ragResultFollowUps) {
+                ragResultFollowUps.innerHTML = '';
+                data.follow_ups.forEach((f) => {
+                    const li = document.createElement('li');
+                    li.textContent = f;
+                    ragResultFollowUps.appendChild(li);
+                });
+            }
         })
         .catch(error => {
             console.error('Error querying RAG:', error);

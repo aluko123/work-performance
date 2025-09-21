@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from datetime import datetime
 import torch
 import torch.nn as nn
@@ -74,3 +74,26 @@ class MultiTaskBertModel(nn.Module):
 
 class RAGQuery(BaseModel):
     question: str
+    session_id: Optional[str] = None
+    speaker: Optional[str] = None
+    date_from: Optional[str] = None
+    date_to: Optional[str] = None
+    top_k: Optional[int] = 8
+
+
+class RAGCitation(BaseModel):
+    source_id: int
+    speaker: Optional[str] = None
+    date: Optional[str] = None
+    timestamp: Optional[str] = None
+    snippet: Optional[str] = None
+
+
+class RAGAnswer(BaseModel):
+    answer: str
+    bullets: List[str] = []
+    metrics_summary: List[Dict[str, Any]] = []
+    citations: List[RAGCitation] = []
+    follow_ups: List[str] = []
+    metadata: Dict[str, Any] = {}
+

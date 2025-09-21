@@ -1,6 +1,10 @@
 # Environments
 .env
 *.env
+AGENTS.md
+
+#Planning
+/plans
 
 # Python cache
 __pycache__/

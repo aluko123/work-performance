@@ -7,23 +7,18 @@ from langchain.chains import RetrievalQA
 from langchain.schema import Document
 
 from . import db_models
+from .rag_graph import RAGGraph
 
 
 class PerformanceRAG:
     def __init__(self, persist_directory: str = "./data/chroma_db"):
         self.embeddings = OpenAIEmbeddings()
-
-        self.vector_store =  Chroma(
+        self.vector_store = Chroma(
             persist_directory=persist_directory,
-            embedding_function=self.embeddings
+            embedding_function=self.embeddings,
         )
-
-        self.qa_chain = RetrievalQA.from_chain_type(
-            llm=ChatOpenAI(model_name="gpt-4o-mini"),
-            chain_type="stuff",
-            retriever=self.vector_store.as_retriever(search_kwargs={"k": 5}),
-            return_source_documents=True
-        )
+        # LangGraph-powered pipeline for insights
+        self.graph = RAGGraph(self.vector_store)
 
     
 
@@ -80,19 +75,28 @@ class PerformanceRAG:
         # if tasks:
         #     await asyncio.gather(*tasks)
 
+        try:
+            self.vector_store.persist()
+        except Exception as e:
+            print(f"Warning: failed to persist vector store: {e}")
         print(f"Finished indexing {total_docs} utterances.")
 
         # self.vector_store.add_documents(documents)
         # print(f"Indexed {len(documents)} new utterances with rich content.")
 
 
-    def query_insights(self, question):
-        print(f"Querying RAG chain with: '{question}'")
-
-        result = self.qa_chain({"query": question})
-        
-        source_docs = result.get("source_documents", [])
-        if source_docs:
-            print(f"Retrieved {len(source_docs)} source documents.")
-
-        return result.get("result", "Sorry I could not find an answer to that question.")    
+    def query_insights(self, question, session_id: str | None = None, filters: dict | None = None):
+        print(f"Querying RAG graph with: '{question}'")
+        try:
+            result = self.graph.run(question=question, session_id=session_id, filters=filters or {})
+            return result
+        except Exception as e:
+            print(f"RAG graph error: {e}")
+            return {
+                "answer": "Sorry, I could not process that question.",
+                "bullets": [],
+                "metrics_summary": [],
+                "citations": [],
+                "follow_ups": [],
+                "metadata": {"error": str(e)},
+            }
