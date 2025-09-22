@@ -6,8 +6,7 @@ from typing import Any, Dict, List, Optional, TypedDict
 
 import redis
 from langchain.chains import RetrievalQA
-from langchain.chat_models import ChatOpenAI
-from langchain.embeddings import OpenAIEmbeddings
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain.schema import Document
 from langchain.vectorstores import Chroma
 from langgraph.graph import StateGraph
@@ -130,7 +129,12 @@ def compute_aggregates(state: GraphState) -> GraphState:
 
 
 def make_llm() -> ChatOpenAI:
-    return ChatOpenAI(model_name="gpt-4o-mini", temperature=0.2)
+    # Encourage strict JSON output in supported models
+    return ChatOpenAI(
+        model_name="gpt-4o-mini",
+        temperature=0.2,
+        model_kwargs={"response_format": {"type": "json_object"}},
+    )
 
 
 def generate_draft(state: GraphState) -> GraphState:
@@ -148,16 +152,20 @@ def generate_draft(state: GraphState) -> GraphState:
         for d in state.get("retrieved", [])
         if d
     ]
+    valid_source_ids = [c["source_id"] for c in citations if c.get("source_id") is not None]
 
     system = (
         "You are an assistant producing concise, evidence-backed performance insights. "
-        "Return ONLY valid JSON matching the schema keys: answer, bullets, metrics_summary, follow_ups."
+        "Return ONLY valid JSON with keys: answer, bullets, metrics_summary, follow_ups, source_ids. "
+        "You MUST include 'source_ids' as a list of integers that reference the provided citations' source_id values. "
+        "Do NOT invent IDs. If uncertain, pick the closest citation and include its source_id."
     )
     user = (
         f"Question: {state['question']}\n"
         f"Analysis type: {analysis_type}\n"
         f"Aggregates (sample size, averages): {json.dumps(aggregates) }\n"
         f"Citations (for reference): {json.dumps(citations)}\n"
+        f"Valid citation source_ids: {json.dumps(valid_source_ids)}\n"
         "Constraints: <=120 words in 'answer'; 3-5 bullets; 2-4 follow_ups."
     )
     msg = [
@@ -166,10 +174,40 @@ def generate_draft(state: GraphState) -> GraphState:
     ]
 
     resp = llm.invoke(msg)
-    try:
-        data = json.loads(resp.content)
-    except Exception:
-        data = {"answer": resp.content, "bullets": [], "metrics_summary": [], "follow_ups": []}
+    # First parse attempt
+    def _parse_content(content: str) -> Dict[str, Any]:
+        try:
+            return json.loads(content)
+        except Exception:
+            return {"answer": content, "bullets": [], "metrics_summary": [], "follow_ups": []}
+
+    data = _parse_content(resp.content)
+
+    # Validate source_ids; retry once with explicit correction request if missing/invalid
+    returned_ids = data.get("source_ids")
+    invalid_or_missing = (
+        not isinstance(returned_ids, list)
+        or len(returned_ids) == 0
+        or not any(sid in valid_source_ids for sid in [
+            (int(x) if isinstance(x, (int, float, str)) and str(x).isdigit() else None) for x in (returned_ids or [])
+        ])
+    )
+    if invalid_or_missing:
+        retry_user = (
+            "Your previous output omitted or had invalid 'source_ids'.\n"
+            "Return ONLY valid JSON now with the same keys, and ensure 'source_ids' is a non-empty list of integers from the following IDs: "
+            f"{json.dumps(valid_source_ids)}.\n"
+            f"Citations (for reference): {json.dumps(citations)}"
+        )
+        retry_msg = [("system", system), ("user", user), ("assistant", resp.content), ("user", retry_user)]
+        resp2 = llm.invoke(retry_msg)
+        data2 = _parse_content(resp2.content)
+        if isinstance(data2.get("source_ids"), list) and data2.get("source_ids"):
+            data = data2
+
+    # Final guardrail: if still no usable source_ids, default to top citations
+    if not isinstance(data.get("source_ids"), list) or not data.get("source_ids"):
+        data["source_ids"] = valid_source_ids[: min(3, len(valid_source_ids))]
 
     state["draft"] = data
     # Carry citations forward for formatting
@@ -179,10 +217,24 @@ def generate_draft(state: GraphState) -> GraphState:
 
 def format_answer(state: GraphState) -> GraphState:
     data = state.get("draft", {}) or {}
-    citations = state.get("_citations", [])
+    all_citations = state.get("_citations", [])
+    # Prefer explicit LLM-selected citations, but fall back gracefully.
+    raw_ids = data.get("source_ids", []) or []
+    used_source_ids: set[int] = set()
+    if isinstance(raw_ids, list):
+        for x in raw_ids:
+            try:
+                used_source_ids.add(int(x))
+            except Exception:
+                continue
+    # If the LLM didn't return any source_ids, include all retrieved citations as a fallback.
+    if not used_source_ids and all_citations:
+        used_source_ids = {int(c.get("source_id")) for c in all_citations if c.get("source_id") is not None}
+    
+    # Filter all citations to only include those the LLM used.
+    final_citations = [c for c in all_citations if c.get("source_id") in used_source_ids]
 
-    # Defensive check: ensure metrics_summary is a list, as the model expects.
-    # The LLM may return a single dict instead of a list of dicts.
+    # Defensive check for metrics_summary.
     metrics_summary_raw = data.get("metrics_summary", []) or []
     if isinstance(metrics_summary_raw, dict):
         metrics_summary = [metrics_summary_raw]
@@ -193,7 +245,7 @@ def format_answer(state: GraphState) -> GraphState:
         answer=data.get("answer", ""),
         bullets=data.get("bullets", []) or [],
         metrics_summary=metrics_summary,
-        citations=[RAGCitation(**c) for c in citations if c.get("source_id") is not None],
+        citations=[RAGCitation(**c) for c in final_citations if c.get("source_id") is not None],
         follow_ups=data.get("follow_ups", []) or [],
         metadata={
             "analysis_type": state.get("analysis_type"),
@@ -246,4 +298,3 @@ class RAGGraph:
         }
         final = self.app.invoke(state)
         return final.get("answer", {})
-
