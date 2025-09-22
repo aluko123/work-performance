@@ -16,10 +16,11 @@ from transformers import BertModel
 # Local imports
 from . import db_models
 from .database import SessionLocal, init_db
-from .models import Analysis as AnalysisModel, MultiTaskBertModel, TrendsResponse, RAGQuery
+from .models import Analysis as AnalysisModel, MultiTaskBertModel, TrendsResponse, RAGQuery, RAGAnswer
 from .services import analyze_structured_transcript, save_analysis_results, get_speaker_trends, get_all_utterances
 from .document_extractor import RobustMeetingExtractor
 from .rag_service import PerformanceRAG
+from .rag_graph import RAGGraph
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 # from .parsing import (
@@ -102,6 +103,7 @@ async def lifespan(app: FastAPI):
     #---RAG Service Init---
     print("Initializing RAG service...")
     rag_service = PerformanceRAG()
+    rag_graph = RAGGraph(vector_store=rag_service.vector_store)
 
     #create temp DB session to load data
     db = SessionLocal()
@@ -116,7 +118,8 @@ async def lifespan(app: FastAPI):
         db.close()
     
     ml_models["rag_service"] = rag_service
-    print("RAG service initialized successfully.")
+    ml_models["rag_graph"] = rag_graph
+    print("RAG service and graph initialized successfully.")
 
 
     yield
@@ -217,11 +220,20 @@ def get_analysis(analysis_id: int, db: Session = Depends(get_db)):
 def get_trends(metric: str, period: str = 'daily', db: Session = Depends(get_db)):
     return get_speaker_trends(db=db, metric=metric, period=period)
 
-@app.post("/api/get_insights")
+@app.post("/api/get_insights", response_model=RAGAnswer)
 def rag_query_endpoint(query: RAGQuery):
-    rag_service: PerformanceRAG = ml_models.get("rag_service")
-    if not rag_service:
-        raise HTTPException(status_code=500, detail="RAG service is not available.")
+    rag_graph: RAGGraph = ml_models.get("rag_graph")
+    if not rag_graph:
+        raise HTTPException(status_code=500, detail="RAG graph is not available.")
     
-    answer = rag_service.query_insights(query.question)
-    return {"answer": answer}
+    result = rag_graph.run(
+        question=query.question,
+        session_id=query.session_id,
+        filters={
+            "speaker": query.speaker,
+            "date_from": query.date_from,
+            "date_to": query.date_to,
+            "top_k": query.top_k,
+        },
+    )
+    return result

@@ -15,3 +15,7 @@ langchain
 langchain-community
 langchain-openai
 chromadb
+langgraph
+redis
+pytest
+pytest-cov
