@@ -7,15 +7,6 @@ interface Message {
     followUps?: string[];
 }
 
-// Define the structure of the API response
-interface RAGAnswer {
-    answer: string;
-    bullets: string[];
-    metrics_summary: any[];
-    citations: any[];
-    follow_ups: string[];
-}
-
 export function RAGQuery() {
     const [sessionId, setSessionId] = useState<string | null>(null);
     const [query, setQuery] = useState('');
@@ -42,17 +33,15 @@ export function RAGQuery() {
         }
     }, [history]);
 
-    const handleSubmit = async (e: FormEvent | { currentTarget: { value: string } }, aQuery?: string) => {
-        if (e) {
-            e.preventDefault();
-        }
-
-        const currentQuery = aQuery || query;
-        if (!currentQuery.trim() || !sessionId) return;
+    const submitQuery = async (queryToSubmit: string) => {
+        if (!queryToSubmit.trim() || !sessionId) return;
 
         setIsLoading(true);
-        setHistory(prev => [...prev, { sender: 'user', text: currentQuery }]);
-        setQuery('');
+        setHistory(prev => [...prev, { sender: 'user', text: queryToSubmit }]);
+        setQuery(''); // Clear input field
+
+        // Add an empty AI message placeholder
+        setHistory(prev => [...prev, { sender: 'ai', text: '' }]);
 
         try {
             const apiUrl = import.meta.env.VITE_API_BASE_URL;
@@ -60,9 +49,8 @@ export function RAGQuery() {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    question: currentQuery,
+                    question: queryToSubmit,
                     session_id: sessionId,
-                    // Add other filters if needed
                 }),
             });
 
@@ -70,23 +58,83 @@ export function RAGQuery() {
                 throw new Error('Failed to get insights from the AI assistant.');
             }
 
-            const data: RAGAnswer = await response.json();
-            setHistory(prev => [...prev, {
-                sender: 'ai',
-                text: data.answer,
-                followUps: data.follow_ups,
-            }]);
+            if (!response.body) {
+                throw new Error("Response body is empty.");
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) {
+                    break;
+                }
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || ''; // Keep the last partial line in the buffer
+
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        const jsonString = line.substring(6);
+                        if (jsonString.trim() === '[DONE]') {
+                            break;
+                        }
+                        try {
+                            const data = JSON.parse(jsonString);
+                            if (data.answer_token) {
+                                setHistory(prev => {
+                                    const newHistory = [...prev];
+                                    const lastMessage = newHistory[newHistory.length - 1];
+                                    if (lastMessage && lastMessage.sender === 'ai') {
+                                        lastMessage.text += data.answer_token;
+                                    }
+                                    return newHistory;
+                                });
+                            }
+                            if (data.follow_ups) {
+                                setHistory(prev => {
+                                    const newHistory = [...prev];
+                                    const lastMessage = newHistory[newHistory.length - 1];
+                                    if (lastMessage && lastMessage.sender === 'ai') {
+                                        lastMessage.followUps = data.follow_ups;
+                                    }
+                                    return newHistory;
+                                });
+                            }
+                        } catch (e) {
+                            console.error("Failed to parse stream chunk:", jsonString);
+                        }
+                    }
+                }
+            }
 
         } catch (error) {
             const err = error as Error;
-            setHistory(prev => [...prev, { sender: 'ai', text: `Error: ${err.message}` }]);
+            setHistory(prev => {
+                const newHistory = [...prev];
+                const lastMessage = newHistory[newHistory.length - 1];
+                if (lastMessage && lastMessage.sender === 'ai' && lastMessage.text === '') {
+                    lastMessage.text = `Error: ${err.message}`;
+                } else {
+                    newHistory.push({ sender: 'ai', text: `Error: ${err.message}` });
+                }
+                return newHistory;
+            });
         } finally {
             setIsLoading(false);
         }
     };
 
+    const handleSubmit = (e: FormEvent) => {
+        e.preventDefault();
+        submitQuery(query);
+    };
+
     const handleFollowUpClick = (followUp: string) => {
-        handleSubmit({} as FormEvent, followUp);
+        submitQuery(followUp);
     };
 
 
@@ -108,7 +156,7 @@ export function RAGQuery() {
                         )}
                     </div>
                 ))}
-                {isLoading && <div className="chat-message ai"><p><i>AI is thinking...</i></p></div>}
+                {isLoading && history[history.length -1]?.sender === 'user' && <div className="chat-message ai"><p><i>AI is thinking...</i></p></div>}
             </div>
             <form onSubmit={handleSubmit} className="chat-form">
                 <input

@@ -25,10 +25,31 @@
         #status { margin-top: 1em; font-weight: 500; }
         button { background-color: #4f46e5; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; font-size: 1em; }
         button:hover { background-color: #4338ca; }
+        button:disabled { background-color: #a5b4fc; cursor: not-allowed; }
         input[type="file"] { margin-bottom: 1em; }
         .chart-container { display: none; margin-bottom: 2em; background: #fff; padding: 1.5em; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);}
         .chart-controls { margin-bottom: 1em; display: flex; align-items: center; gap: 1em; flex-wrap: wrap; }
         select { padding: 8px; border-radius: 5px; border: 1px solid #ccc; }
+
+        /* RAG Chat Styles */
+        #rag-section { display: flex; flex-direction: column; height: 80vh; max-height: 700px; background: #fff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        #ragHistoryContainer { flex-grow: 1; overflow-y: auto; padding: 1.5em; border-bottom: 1px solid #e5e7eb; }
+        .chat-message { padding: 12px; border-radius: 8px; margin-bottom: 1em; max-width: 80%; line-height: 1.5; }
+        .chat-message.user { background-color: #e0e7ff; align-self: flex-end; margin-left: auto; }
+        .chat-message.ai { background-color: #f3f4f6; align-self: flex-start; }
+        .chat-message p { margin: 0; }
+        .chat-message ul { margin: 0.75em 0 0 1.25em; padding: 0; }
+        .rag-form { display: flex; padding: 1em; gap: 1em; }
+        #ragQueryInput { flex-grow: 1; border: 1px solid #ccc; border-radius: 5px; padding: 10px; font-size: 1em; }
+        .follow-ups { margin-top: 1em; display: flex; flex-wrap: wrap; gap: 8px; }
+        .follow-ups button { background-color: #eef2ff; color: #4338ca; border: 1px solid #c7d2fe; font-size: 0.9em; padding: 6px 12px; }
+        .follow-ups button:hover { background-color: #e0e7ff; }
+        .rag-citations { margin-top: 1em; border-top: 1px solid #eee; padding-top: 1em; }
+        .rag-citations h4 { margin: 0 0 0.5em 0; font-size: 0.9em; color: #555; }
+        .citation { font-size: 0.85em; border: 1px solid #eee; padding: 8px; border-radius: 4px; margin-bottom: 8px; }
+        .citation .meta { font-weight: 500; color: #333; margin-bottom: 4px; }
+        .citation .snippet { color: #555; }
+
     </style>
 </head>
 <body>
@@ -79,31 +100,14 @@
             </section>
 
             <section id="rag-section">
-                <h2>Query Insights</h2>
-                <div class="chart-controls">
-                    <textarea id="ragQueryInput" placeholder="Ask a question about the performance data..." style="width: 100%; min-height: 60px; font-family: inherit; font-size:  1em; padding: 10px; border-radius: 5px; border: 1px solid #ccc;"></textarea>
-                </div>
-                <button id="ragQueryButton">Get Insights</button>
-                <div id="ragResultContainer" style="margin-top: 1em; padding: 1.5em; background-color: #fff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); display: none;">
-                    <p id="ragResultText"></p>
-                    <div id="ragResultBulletsContainer" style="margin-top: 0.75em;">
-                        <strong>Key Points</strong>
-                        <ul id="ragResultBullets" style="margin-top: 0.5em;"></ul>
-                    </div>
-                    <div id="ragResultMetricsContainer" style="margin-top: 0.75em;">
-                        <strong>Metrics Summary</strong>
-                        <div id="ragResultMetrics" style="margin-top: 0.5em;"></div>
-                    </div>
-                    <div id="ragResultCitationsContainer" style="margin-top: 0.75em;">
-                        <strong>Evidence</strong>
-                        <div id="ragResultCitations" style="margin-top: 0.5em;"></div>
-                    </div>
-                    <div id="ragResultFollowUpsContainer" style="margin-top: 0.75em;">
-                        <strong>Follow-ups</strong>
-                        <ul id="ragResultFollowUps" style="margin-top: 0.5em;"></ul>
-                    </div>
+                <h2>AI Assistant</h2>
+                <div id="ragHistoryContainer"></div>
+                <div class="rag-form">
+                    <input type="text" id="ragQueryInput" placeholder="Ask a question about the performance data...">
+                    <button id="ragQueryButton">Send</button>
                 </div>
             </section>
+
         </main>
     </div>
 

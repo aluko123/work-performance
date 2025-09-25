@@ -26,32 +26,43 @@ document.addEventListener('DOMContentLoaded', () => {
     //RAG Insights
     const ragQueryInput = document.getElementById('ragQueryInput');
     const ragQueryButton = document.getElementById('ragQueryButton');
-    const ragResultContainer = document.getElementById('ragResultContainer');
-    const ragResultText = document.getElementById('ragResultText');
-    const ragResultBullets = document.getElementById('ragResultBullets');
-    const ragResultCitations = document.getElementById('ragResultCitations');
-    const ragResultMetrics = document.getElementById('ragResultMetrics');
-    const ragResultFollowUps = document.getElementById('ragResultFollowUps');
+    const ragHistoryContainer = document.getElementById('ragHistoryContainer'); // New container for chat history
 
 
     // --- Constants ---
     const API_BASE_URL = 'http://localhost:8000';
     let columnMapping = {};
+    let ragSessionId = null;
 
     // --- Initialization ---
     loadColumnMapping().then(() => {
         loadAnalyses();
         populateTrendsMetricSelector();
         renderTrendsChart();
+        initializeRagSession();
     });
 
     // --- Event Listeners ---
     analyzeButton.addEventListener('click', handleAnalyzeClick);
     trendsMetricSelector.addEventListener('change', renderTrendsChart);
     trendsPeriodSelector.addEventListener('change', renderTrendsChart);
-    ragQueryButton.addEventListener('click', handleRagQuery);
+    ragQueryButton.addEventListener('click', () => handleRagQuery(ragQueryInput.value));
+    ragQueryInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            handleRagQuery(ragQueryInput.value);
+        }
+    });
 
     // --- Core Functions ---
+
+    function initializeRagSession() {
+        ragSessionId = localStorage.getItem('rag_session_id');
+        if (!ragSessionId) {
+            ragSessionId = `rag-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+            localStorage.setItem('rag_session_id', ragSessionId);
+        }
+    }
 
     async function loadColumnMapping() {
         try {
@@ -119,108 +130,143 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
 
-    //handle RAG query
-    function handleRagQuery() {
-        const question = ragQueryInput.value;
+    //handle RAG query with streaming
+    async function handleRagQuery(question) {
         if (!question.trim()) {
             updateStatus('Please enter a question first.', 'orange');
             return;
         }
 
-        ragResultText.textContent = 'Thinking...';
-        ragResultContainer.style.display = 'block';
-        if (ragResultBullets) ragResultBullets.innerHTML = '';
-        if (ragResultCitations) ragResultCitations.innerHTML = '';
-        if (ragResultMetrics) ragResultMetrics.innerHTML = '';
-        if (ragResultFollowUps) ragResultFollowUps.innerHTML = '';
+        ragQueryInput.value = ''; // Clear input
+        ragQueryButton.disabled = true;
 
-        fetch(`${API_BASE_URL}/api/get_insights`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ question: question }),
-        })
-        .then(response => {
+        // 1. Display user's message
+        const userMessageDiv = document.createElement('div');
+        userMessageDiv.className = 'chat-message user';
+        userMessageDiv.textContent = question;
+        ragHistoryContainer.appendChild(userMessageDiv);
+
+        // 2. Create placeholder for AI response
+        const aiMessageDiv = document.createElement('div');
+        aiMessageDiv.className = 'chat-message ai';
+        const answerP = document.createElement('p');
+        answerP.textContent = 'Thinking...';
+        aiMessageDiv.appendChild(answerP);
+        ragHistoryContainer.appendChild(aiMessageDiv);
+        ragHistoryContainer.scrollTop = ragHistoryContainer.scrollHeight; // Scroll down
+
+        try {
+            const response = await fetch(`${API_BASE_URL}/api/get_insights`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ question: question, session_id: ragSessionId }),
+            });
+
             if (!response.ok) {
-                return response.json().then(err => { throw new Error(err.detail || "Failed to get insights")});
-            }
-            return response.json();
-        })
-        .then(data => {
-            // Answer
-            ragResultText.textContent = data.answer || 'No answer produced.';
-
-            // Bullets
-            if (Array.isArray(data.bullets) && ragResultBullets) {
-                ragResultBullets.innerHTML = '';
-                data.bullets.forEach((b) => {
-                    const li = document.createElement('li');
-                    li.textContent = b;
-                    ragResultBullets.appendChild(li);
-                });
+                const err = await response.json();
+                throw new Error(err.detail || 'Failed to get insights');
             }
 
-            // Citations
-            if (Array.isArray(data.citations) && ragResultCitations) {
-                ragResultCitations.innerHTML = '';
-                data.citations.forEach((c) => {
-                    const wrapper = document.createElement('div');
-                    wrapper.style.border = '1px solid #eee';
-                    wrapper.style.padding = '8px';
-                    wrapper.style.borderRadius = '6px';
-                    wrapper.style.marginBottom = '6px';
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let finalData = null;
 
-                    const meta = [c.speaker, c.date, c.timestamp].filter(Boolean).join(' • ');
-                    const metaEl = document.createElement('div');
-                    metaEl.style.fontSize = '0.9em';
-                    metaEl.style.color = '#555';
-                    metaEl.textContent = meta || 'Citation';
+            answerP.textContent = ''; // Clear 'Thinking...'
 
-                    const snippetEl = document.createElement('div');
-                    snippetEl.style.marginTop = '4px';
-                    snippetEl.textContent = c.snippet || '';
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
 
-                    wrapper.appendChild(metaEl);
-                    wrapper.appendChild(snippetEl);
-                    ragResultCitations.appendChild(wrapper);
-                });
-            }
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
 
-            // Metrics summary (flexible handling of strings or objects)
-            if (Array.isArray(data.metrics_summary) && ragResultMetrics) {
-                ragResultMetrics.innerHTML = '';
-                data.metrics_summary.forEach((m) => {
-                    const line = document.createElement('div');
-                    line.style.border = '1px dashed #e5e7eb';
-                    line.style.padding = '6px';
-                    line.style.borderRadius = '6px';
-                    line.style.marginBottom = '6px';
-                    if (m && typeof m === 'object') {
-                        const pairs = Object.entries(m).map(([k, v]) => `${k}: ${v}`).join(' • ');
-                        line.textContent = pairs || JSON.stringify(m);
-                    } else {
-                        line.textContent = String(m);
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        const jsonString = line.substring(6);
+                        if (jsonString.trim() === '[DONE]') continue;
+                        try {
+                            const chunk = JSON.parse(jsonString);
+                            if (chunk.answer_token) {
+                                answerP.textContent += chunk.answer_token;
+                            } else {
+                                finalData = chunk;
+                            }
+                        } catch (e) {
+                            console.error('Failed to parse stream chunk:', jsonString);
+                        }
                     }
-                    ragResultMetrics.appendChild(line);
-                });
+                }
             }
 
-            // Follow-ups
-            if (Array.isArray(data.follow_ups) && ragResultFollowUps) {
-                ragResultFollowUps.innerHTML = '';
-                data.follow_ups.forEach((f) => {
-                    const li = document.createElement('li');
-                    li.textContent = f;
-                    ragResultFollowUps.appendChild(li);
-                });
+            // 3. Render final data (bullets, citations, follow-ups)
+            if (finalData) {
+                renderRagFinalData(aiMessageDiv, finalData);
             }
-        })
-        .catch(error => {
-            console.error('Error querying RAG:', error);
-            ragResultText.textContent = 'An error occured while fetching insights: ' + error.message;
-        });
-        
+
+        } catch (error) {
+            answerP.textContent = 'An error occurred: ' + error.message;
+            answerP.style.color = 'red';
+        } finally {
+            ragQueryButton.disabled = false;
+            ragHistoryContainer.scrollTop = ragHistoryContainer.scrollHeight;
+        }
+    }
+
+    function renderRagFinalData(container, data) {
+        // Bullets
+        if (Array.isArray(data.bullets) && data.bullets.length > 0) {
+            const ul = document.createElement('ul');
+            data.bullets.forEach(b => {
+                const li = document.createElement('li');
+                li.textContent = b;
+                ul.appendChild(li);
+            });
+            container.appendChild(ul);
+        }
+
+        // Metrics Summary
+        if (Array.isArray(data.metrics_summary) && data.metrics_summary.length > 0) {
+            const metricsDiv = document.createElement('div');
+            metricsDiv.className = 'rag-metrics';
+            data.metrics_summary.forEach(m => {
+                const line = document.createElement('div');
+                line.textContent = (typeof m === 'object') ? JSON.stringify(m) : String(m);
+                metricsDiv.appendChild(line);
+            });
+            container.appendChild(metricsDiv);
+        }
+
+        // Citations
+        if (Array.isArray(data.citations) && data.citations.length > 0) {
+            const citationsDiv = document.createElement('div');
+            citationsDiv.className = 'rag-citations';
+            const title = document.createElement('h4');
+            title.textContent = 'Sources';
+            citationsDiv.appendChild(title);
+            data.citations.forEach(c => {
+                const wrapper = document.createElement('div');
+                wrapper.className = 'citation';
+                const meta = [c.speaker, c.date, c.timestamp].filter(Boolean).join(' • ');
+                wrapper.innerHTML = `<div class='meta'>${meta}</div><div class='snippet'>${c.snippet}</div>`;
+                citationsDiv.appendChild(wrapper);
+            });
+            container.appendChild(citationsDiv);
+        }
+
+        // Follow-ups
+        if (Array.isArray(data.follow_ups) && data.follow_ups.length > 0) {
+            const followUpsDiv = document.createElement('div');
+            followUpsDiv.className = 'follow-ups';
+            data.follow_ups.forEach(f => {
+                const button = document.createElement('button');
+                button.textContent = f;
+                button.onclick = () => handleRagQuery(f);
+                followUpsDiv.appendChild(button);
+            });
+            container.appendChild(followUpsDiv);
+        }
     }
 
 
