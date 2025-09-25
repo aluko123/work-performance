@@ -2,6 +2,7 @@ import pandas as pd
 import torch
 import json
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Request
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import os
@@ -220,20 +221,35 @@ def get_analysis(analysis_id: int, db: Session = Depends(get_db)):
 def get_trends(metric: str, period: str = 'daily', db: Session = Depends(get_db)):
     return get_speaker_trends(db=db, metric=metric, period=period)
 
-@app.post("/api/get_insights", response_model=RAGAnswer)
-def rag_query_endpoint(query: RAGQuery):
-    rag_graph: RAGGraph = ml_models.get("rag_graph")
+@app.post("/api/get_insights")
+async def rag_query_endpoint(query: RAGQuery):
+    rag_graph: RAGGraph = ml_models.get("rag_graph", [])
     if not rag_graph:
         raise HTTPException(status_code=500, detail="RAG graph is not available.")
-    
-    result = rag_graph.run(
-        question=query.question,
-        session_id=query.session_id,
-        filters={
-            "speaker": query.speaker,
-            "date_from": query.date_from,
-            "date_to": query.date_to,
-            "top_k": query.top_k,
-        },
-    )
-    return result
+
+    async def stream_generator():
+        # This will hold the final data like follow-ups and citations
+        final_data = {}
+        
+        # Use the new streaming method on the graph
+        async for chunk in rag_graph.astream_run(
+            question=query.question,
+            session_id=query.session_id,
+            filters={
+                "speaker": query.speaker,
+                "date_from": query.date_from,
+                "date_to": query.date_to,
+                "top_k": query.top_k,
+            },
+        ):
+            if "answer_token" in chunk:
+                # Yield the token for the streaming answer
+                yield f"data: {json.dumps({'answer_token': chunk['answer_token']})}\n\n"
+            else:
+                # Keep the final metadata
+                final_data = chunk
+        
+        # After the answer stream is complete, send the final metadata
+        yield f"data: {json.dumps(final_data)}\n\n"
+
+    return StreamingResponse(stream_generator(), media_type="text/event-stream")
