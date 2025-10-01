@@ -6,29 +6,29 @@ AI powered workplace performance tracking platform
 ```mermaid
 graph TD
     subgraph User Interaction
-        User([<fa:fa-user> User])
-        Frontend[<fa:fa-window-maximize> Frontend (React)]
+        User("User")
+        Frontend("Frontend (React)")
     end
 
     subgraph Backend Services
-        BackendApi[<fa:fa-server> FastAPI Backend]
-        DocExtractor[<fa:fa-file-import> Document Extractor]
-        AnalysisEngine[<fa:fa-cogs> Analysis Engine]
-        RAG_Pipeline[<fa:fa-retweet> RAG Pipeline]
+        BackendApi("FastAPI Backend")
+        DocExtractor("Document Extractor")
+        AnalysisEngine("Analysis Engine")
+        RAG_Pipeline("RAG Pipeline")
     end
 
     subgraph Data & Models
-        Database[<fa:fa-database> SQL Database]
-        VectorStore[<fa:fa-vector-square> Vector Store (ChromaDB)]
-        BertModel[<fa:fa-microchip> Multi-Task BERT Model]
-        SAModel[<fa:fa-microchip> SA Model]
-        TrainingScripts[<fa:fa-code> Offline Training Scripts]
-        TrainingData[<fa:fa-file-csv> Labeled CSV Data]
+        Database("SQL Database")
+        VectorStore("Vector Store (ChromaDB)")
+        BertModel("Multi-Task BERT Model")
+        SAModel("SA Model")
+        TrainingScripts("Offline Training Scripts")
+        TrainingData("Labeled CSV Data")
     end
 
     subgraph External APIs
-        OpenAI_Chunkr[<fa:fa-cloud> OpenAI / ChunkrAI]
-        OpenAI_LLM[<fa:fa-cloud> OpenAI LLM]
+        OpenAI_Chunkr("OpenAI / ChunkrAI")
+        OpenAI_LLM("OpenAI LLM")
     end
 
     %% Data Ingestion and Analysis Flow
