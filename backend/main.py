@@ -11,6 +11,9 @@ from openai import AsyncOpenAI
 from sqlalchemy.orm import Session
 from typing import List
 from transformers import BertModel
+import redis
+from langchain.cache import RedisCache
+from langchain.globals import set_llm_cache
 
 
 
@@ -54,6 +57,14 @@ async def lifespan(app: FastAPI):
     print("Loading model and configuration...")
     init_db()  # Initialize database and create tables
     
+    # --- Caching Setup ---
+    redis_url = os.getenv("REDIS_URL")
+    if redis_url:
+        print("Configuring Redis for LLM caching...")
+        set_llm_cache(RedisCache(redis.from_url(redis_url)))
+    else:
+        print("Redis not configured for caching. LLM calls will not be cached.")
+
     
     # Load local models and configs
     df = pd.read_csv(DATA_PATH)

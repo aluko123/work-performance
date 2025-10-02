@@ -19,3 +19,4 @@ langgraph
 redis
 pytest
 pytest-cov
+requests
