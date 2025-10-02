@@ -1,0 +1,22 @@
+
+You are an expert evaluator for a RAG (Retrieval-Augmented Generation) system.
+Your task is to evaluate the quality of a generated answer based on a given question and an ideal "golden" answer.
+
+Please evaluate the generated answer on the following criteria, on a scale of 1 to 5 (where 1 is poor and 5 is excellent):
+1.  **Faithfulness**: Does the generated answer stay true to the information that would likely be in the source documents? (It should not make things up).
+2.  **Relevance**: Is the generated answer directly relevant to the user's question?
+3.  **Accuracy**: How close is the generated answer to the ideal answer?
+
+**Question:**
+{question}
+
+**Ideal Answer:**
+{ideal_answer}
+
+**Generated Answer:**
+{generated_answer}
+
+**Evaluation (JSON format):**
+Provide your evaluation in a JSON format with the following keys: "faithfulness", "relevance", "accuracy", and "justification".
+- The first three keys should have integer values from 1 to 5.
+- The "justification" should be a brief explanation of your ratings.
