@@ -49,6 +49,12 @@ class RobustMeetingExtractor:
     async def enhance_with_chunkr(self, file_path: str, unstructured_elements: List) -> List[Dict]:
         print("Stage 2: Enhancing with Chunkr for semantic chunking...")
         chunkr_result = await self.chunkr.upload(file_path)
+        
+        # If the result is a task-like object, await it to get the final result.
+        if not hasattr(chunkr_result, 'chunks'):
+            print("Chunkr returned a task response, awaiting final result...")
+            chunkr_result = await chunkr_result
+
         return self.merge_processing_results(unstructured_elements, chunkr_result)
 
     def merge_processing_results(self, unstructured_elements, chunkr_result) -> List[Dict]:

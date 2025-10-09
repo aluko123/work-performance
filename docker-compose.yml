@@ -1,12 +1,25 @@
 
 
 services:
+  migrate:
+    build: .
+    command: ["bash", "-lc", "python -c 'from backend.database import init_db; init_db()' && alembic upgrade head"]
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
+      - REDIS_URL=redis://redis:6379/0
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+
   backend:
     build: .
     ports:
       - "8000:8000"
     environment:
       - PYTHONUNBUFFERED=1
+      - ARQ_REDIS_URL=redis://redis:6379
       - REDIS_URL=redis://redis:6379/0
     env_file:
       - .env
@@ -14,7 +27,10 @@ services:
       - ./bert_classification:/app/bert_classification
       - ./data:/app/data
     depends_on:
-      - redis
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
 
   frontend:
     build: ./frontend
@@ -30,6 +46,24 @@ services:
     volumes:
       - redis-data:/data
     command: ["redis-server", "--appendonly", "yes"]
+
+  arq_worker:
+    build: .
+    command: ["arq", "backend.worker.WorkerSettings"]
+    environment:
+      - PYTHONUNBUFFERED=1
+      - ARQ_REDIS_URL=redis://redis:6379
+      - REDIS_URL=redis://redis:6379/0
+    env_file:
+      - .env
+    volumes:
+      - ./bert_classification:/app/bert_classification
+      - ./data:/app/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
 
 volumes:
   redis-data:

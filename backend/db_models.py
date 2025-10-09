@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, JSON, Text, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime, JSON, Text, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from .database import Base
@@ -26,6 +26,8 @@ class Utterance(Base):
     predictions = Column(JSON)
     aggregated_scores = Column(JSON)
     sa_labels = Column(JSON, nullable=True)
+    is_indexed = Column(Boolean, default=False, nullable=False, server_default='0')
+
     
     analysis = relationship("Analysis", back_populates="utterances")    
 

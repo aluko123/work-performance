@@ -16,6 +16,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the backend application code into the container
 COPY ./backend ./backend
 
+# Copy Alembic configuration and migrations
+COPY alembic.ini ./alembic.ini
+COPY migrations ./migrations
+
 # Expose port 8000 to the outside world
 EXPOSE 8000
 

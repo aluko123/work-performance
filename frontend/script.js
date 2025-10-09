@@ -35,12 +35,17 @@ document.addEventListener('DOMContentLoaded', () => {
     let ragSessionId = null;
 
     // --- Initialization ---
-    loadColumnMapping().then(() => {
-        loadAnalyses();
+    async function initializeApp() {
+        await loadColumnMapping();
+        const analyses = await loadAnalyses();
+        if (analyses && analyses.length > 0) {
+            loadAnalysisDetails(analyses[0].id);
+        }
         populateTrendsMetricSelector();
         renderTrendsChart();
         initializeRagSession();
-    });
+    }
+    initializeApp();
 
     // --- Event Listeners ---
     analyzeButton.addEventListener('click', handleAnalyzeClick);
@@ -82,24 +87,23 @@ document.addEventListener('DOMContentLoaded', () => {
         return (rawName.charAt(0).toUpperCase() + rawName.slice(1)).replace(/_/g, ' ');
     }
 
-    function loadAnalyses() {
-        fetch(`${API_BASE_URL}/analyses/`)
-            .then(response => response.json())
-            .then(data => {
-                analysesList.innerHTML = '';
-                data.forEach(analysis => {
-                    const li = document.createElement('li');
-                    li.textContent = `${analysis.source_filename} - ${new Date(analysis.created_at).toLocaleString()}`;
-                    li.dataset.id = analysis.id;
-                    li.addEventListener('click', () => loadAnalysisDetails(analysis.id));
-                    analysesList.appendChild(li);
-                });
-                // Automatically load the first analysis if it exists
-                if (data.length > 0) {
-                    loadAnalysisDetails(data[0].id);
-                }
-            })
-            .catch(error => console.error('Error loading analyses:', error));
+    async function loadAnalyses() {
+        try {
+            const response = await fetch(`${API_BASE_URL}/analyses/`);
+            const data = await response.json();
+            analysesList.innerHTML = '';
+            data.forEach(analysis => {
+                const li = document.createElement('li');
+                li.textContent = `${analysis.source_filename} - ${new Date(analysis.created_at).toLocaleString()}`;
+                li.dataset.id = analysis.id;
+                li.addEventListener('click', () => loadAnalysisDetails(analysis.id));
+                analysesList.appendChild(li);
+            });
+            return data; // Return data for chaining
+        } catch (error) {
+            console.error('Error loading analyses:', error);
+            return []; // Return empty array on error
+        }
     }
 
     function handleAnalyzeClick() {
@@ -108,25 +112,91 @@ document.addEventListener('DOMContentLoaded', () => {
             updateStatus('Please select a file first.', 'orange');
             return;
         }
-        updateStatus('Analyzing... please wait.', 'blue');
+
+        updateStatus('Uploading file and starting analysis...', 'blue');
+        analyzeButton.disabled = true;
+        fileInput.disabled = true;
+
         const formData = new FormData();
         formData.append('text_file', file);
 
-        fetch(`${API_BASE_URL}/analyze_text/`, { method: 'POST', body: formData })
-            .then(response => {
-                if (!response.ok) return response.json().then(err => { throw new Error(err.detail || 'Analysis failed') });
-                return response.json();
-            })
-            .then(newAnalysis => {
-                updateStatus('Analysis complete.', 'green');
-                loadAnalyses();
-                loadAnalysisDetails(newAnalysis.id);
-                renderTrendsChart(); // Refresh trends chart
-            })
-            .catch(error => {
-                console.error('Error during analysis:', error);
-                updateStatus(`Error: ${error.message}`, 'red');
-            });
+        // 1. Start the analysis job
+        fetch(`${API_BASE_URL}/analyze_text/`, {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => {
+            if (!response.ok) {
+                return response.json().then(err => { throw new Error(err.detail || 'Failed to start analysis job.') });
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data.job_id) {
+                updateStatus('Analysis in progress. Please wait...', 'blue');
+                // 2. Start polling for the result
+                pollAnalysisStatus(data.job_id);
+            } else {
+                throw new Error('Did not receive a job ID from the server.');
+            }
+        })
+        .catch(error => {
+            console.error('Error during analysis initiation:', error);
+            updateStatus(`Error: ${error.message}`, 'red');
+            analyzeButton.disabled = false;
+            fileInput.disabled = false;
+        });
+    }
+
+    function pollAnalysisStatus(jobId) {
+        const intervalId = setInterval(() => {
+            fetch(`${API_BASE_URL}/analysis_status/${jobId}`)
+                .then(response => {
+                    if (!response.ok) {
+                        // If the server returns a 404 or other error, stop polling.
+                        throw new Error(`Server returned an error: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(async (data) => { // Make callback async
+                    if (data.status === 'COMPLETED') {
+                        // 3. Job is done
+                        clearInterval(intervalId);
+                        updateStatus('Analysis complete.', 'green');
+                        
+                        // Refresh the list, then load the new item
+                        await loadAnalyses(); 
+                        if (data.analysis_id) {
+                            loadAnalysisDetails(data.analysis_id);
+                        }
+                        renderTrendsChart(); // Refresh trends chart
+
+                        // Re-enable UI
+                        analyzeButton.disabled = false;
+                        fileInput.disabled = false;
+                        fileInput.value = ''; // Reset file input
+
+                    } else if (data.status === 'FAILED') {
+                        // 4. Job failed
+                        clearInterval(intervalId);
+                        updateStatus(`Analysis failed: ${data.error || 'Unknown error'}`, 'red');
+                        analyzeButton.disabled = false;
+                        fileInput.disabled = false;
+
+                    } else {
+                        // 5. Job is still processing
+                        updateStatus(`Analysis in progress (${data.status || '...'})`, 'blue');
+                    }
+                })
+                .catch(error => {
+                    // 6. Polling failed
+                    clearInterval(intervalId);
+                    console.error('Error during status polling:', error);
+                    updateStatus(`Error checking analysis status: ${error.message}`, 'red');
+                    analyzeButton.disabled = false;
+                    fileInput.disabled = false;
+                });
+        }, 5000); // Poll every 5 seconds
     }
 
 

@@ -12,6 +12,8 @@ help:
 	@echo "  smoke       Basic API curl checks"
 	@echo "  test        Run pytest offline"
 	@echo "  test-cov    Run pytest with coverage report"
+	@echo "  migrate     Run alembic upgrade head (local)"
+	@echo "  docker-migrate  Run one-shot migrate service"
 
 setup:
 	python3 -m venv .venv
@@ -41,3 +43,15 @@ test:
 
 test-cov:
 	pytest -q --cov=backend --cov-report=term-missing backend/tests
+
+db-migrate:
+	docker compose exec backend alembic revision --autogenerate -m "$(m)"
+
+db-upgrade:
+	docker compose exec backend alembic upgrade head
+
+migrate:
+	alembic upgrade head
+
+docker-migrate:
+	docker compose run --rm migrate
