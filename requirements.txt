@@ -20,3 +20,6 @@ redis
 pytest
 pytest-cov
 requests
+arq
+alembic
+msgpack

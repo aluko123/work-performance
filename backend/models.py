@@ -26,9 +26,13 @@ class Analysis(BaseModel):
     source_filename: str
     created_at: datetime
     utterances: List[Utterance] = []
+    job_id: Optional[str] = None
 
     class Config:
         from_attributes = True
+
+class AsyncTask(BaseModel):
+    job_id: str
 
 class AnalysisResult(BaseModel):
     Date: str | None

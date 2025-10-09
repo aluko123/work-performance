@@ -32,9 +32,25 @@ class GraphState(TypedDict):
     _citations: List[Dict[str, Any]]
 
 
-def _redis_client() -> redis.Redis:
-    url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-    return redis.from_url(url)
+def _redis_client() -> Optional[redis.Redis]:
+    """Return a Redis client if available; otherwise None.
+
+    - Uses `REDIS_URL` if set, otherwise falls back to `ARQ_REDIS_URL`,
+      otherwise to a Docker-friendly default `redis://redis:6379/0`.
+    - Pings the server to validate connectivity; returns None on failure.
+    """
+    url = (
+        os.getenv("REDIS_URL")
+        or os.getenv("ARQ_REDIS_URL")
+        or "redis://redis:6379/0"
+    )
+    try:
+        client = redis.from_url(url)
+        # Validate connection early; if it fails, treat as unavailable
+        client.ping()
+        return client
+    except Exception:
+        return None
 
 
 def load_history(state: GraphState) -> GraphState:
@@ -43,8 +59,19 @@ def load_history(state: GraphState) -> GraphState:
         state["history"] = []
         return state
     r = _redis_client()
-    raw = r.get(f"rag:hist:{sid}")
-    history: List[Dict[str, str]] = json.loads(raw) if raw else []
+    if not r:
+        state["history"] = []
+        return state
+    try:
+        raw = r.get(f"rag:hist:{sid}")
+    except Exception:
+        raw = None
+    history: List[Dict[str, str]] = []
+    if raw:
+        try:
+            history = json.loads(raw)
+        except Exception:
+            history = []
     state["history"] = history[-10:]
     return state
 
@@ -60,7 +87,11 @@ def save_history(state: GraphState) -> GraphState:
     a = draft.get("answer") if isinstance(draft, dict) else None
     if q and a:
         history = (history + [{"role": "user", "content": q}, {"role": "assistant", "content": a}])[-10:]
-    r.set(f"rag:hist:{sid}", json.dumps(history))
+    if r:
+        try:
+            r.set(f"rag:hist:{sid}", json.dumps(history))
+        except Exception:
+            pass
     state["history"] = history
     return state
 

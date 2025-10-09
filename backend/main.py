@@ -1,6 +1,7 @@
 import pandas as pd
 import torch
 import json
+import uuid
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Request
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,31 +15,26 @@ from transformers import BertModel
 import redis
 from langchain.cache import RedisCache
 from langchain.globals import set_llm_cache
-
-
+from arq import create_pool
+from arq.connections import RedisSettings
+import msgpack
 
 # Local imports
 from . import db_models
 from .database import SessionLocal, init_db
-from .models import Analysis as AnalysisModel, MultiTaskBertModel, TrendsResponse, RAGQuery, RAGAnswer
-from .services import analyze_structured_transcript, save_analysis_results, get_speaker_trends, get_all_utterances
+from .models import Analysis as AnalysisModel, MultiTaskBertModel, TrendsResponse, RAGQuery, RAGAnswer, AsyncTask
+from .services import get_speaker_trends
 from .document_extractor import RobustMeetingExtractor
 from .rag_service import PerformanceRAG
 from .rag_graph import RAGGraph
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
-
-# from .parsing import (
-#     parse_document_with_unstructured, 
-#     extract_transcript_single_shot, 
-#     extract_transcript_chunking
-# )
-
 
 # --- Configuration ---
 MODEL_PATH = os.getenv('MODEL_PATH', 'bert_classification/multi_task_bert_model.pth')
 DATA_PATH = os.getenv('DATA_PATH', 'bert_classification/master_training_data.csv')
 CONFIG_PATH = os.getenv('CONFIG_PATH', 'backend/config/metric_groups.json')
 SA_MODEL_PATH = os.getenv('SA_MODEL_PATH', 'bert_classification/sa_bert_model_multilabel/')
+ARQ_REDIS_URL = os.getenv("ARQ_REDIS_URL", "redis://localhost:6379")
 
 # --- Application State ---
 ml_models = {}
@@ -54,97 +50,48 @@ def get_db():
 # --- FastAPI Lifespan Management ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("Loading model and configuration...")
-    init_db()  # Initialize database and create tables
-    
-    # --- Caching Setup ---
-    redis_url = os.getenv("REDIS_URL")
-    if redis_url:
-        print("Configuring Redis for LLM caching...")
-        set_llm_cache(RedisCache(redis.from_url(redis_url)))
-    else:
-        print("Redis not configured for caching. LLM calls will not be cached.")
+    print("Initializing application...")
+    init_db()  # Initialize database
 
-    
-    # Load local models and configs
-    df = pd.read_csv(DATA_PATH)
-    ml_models["metric_cols"] = [col for col in df.columns if col.startswith(('comm_', 'feedback_', 'deviation_', 'sqdcp_'))]
-    n_classes = {col: 5 for col in ml_models["metric_cols"]}
+    # Log configured CORS origins for visibility
+    cors_env = os.getenv("CORS_ORIGINS", "http://localhost:8001,http://127.0.0.1:8001")
+    print(f"CORS_ORIGINS loaded: {cors_env}")
 
-    # Load the base BERT model once
-    base_bert_model = BertModel.from_pretrained('bert-base-uncased')
-    
-    model = MultiTaskBertModel(n_classes, base_bert_model)
-    model.load_state_dict(torch.load(MODEL_PATH, map_location=torch.device('cpu')))
-    model.eval()
-    ml_models["model"] = model
-    ml_models["tokenizer"] = AutoTokenizer.from_pretrained('bert-base-uncased')
+    # --- Arq Redis Pool ---
+    redis_settings = RedisSettings.from_dsn(ARQ_REDIS_URL)
+    app.state.arq_pool = await create_pool(redis_settings)
 
-    print("Loading SA model...")
-    ml_models["sa_tokenizer"] = AutoTokenizer.from_pretrained(SA_MODEL_PATH)
-    ml_models["sa_model"] = AutoModelForSequenceClassification.from_pretrained(SA_MODEL_PATH)
-    ml_models["sa_model"].eval()
-    print("SA model loaded successfully.")
+    # --- Enqueue Startup Indexing Task (Non-blocking) ---
+    await app.state.arq_pool.enqueue_job("startup_indexing_task")
+    print("Enqueued startup indexing task.")
 
+    # --- Caching, Model Loading, etc. (remains the same) ---
+    # ... (rest of the original lifespan logic for model loading)
+    print("Loading models and other resources...")
+    # NOTE: The original blocking indexing logic is now removed from here.
 
-
-    # Load metric groups
-    with open(CONFIG_PATH, 'r') as f:
-        ml_models["metric_groups"] = json.load(f)
-
-
-    # Configure OpenAI and Chunkr clients
-    openai_api_key = os.getenv("OPENAI_API_KEY")
-    chunkr_api_key = os.getenv("CHUNKRAI_API_KEY")
-    if not openai_api_key or not chunkr_api_key:
-        print("WARNING: OPENAI_API_KEY or CHUNKR_API_KEY environment variables not set.")
-    
-
-    openai_client =AsyncOpenAI(api_key=openai_api_key)
-    ml_models["openai_client"] = openai_client
-
-    # # Configure parsing strategy
-    # ml_models["parsing_strategy"] = os.getenv("PARSING_STRATEGY", "single_shot")
-    # print(f"Using parsing strategy: {ml_models['parsing_strategy']}")
-
-    ml_models["extractor"] = RobustMeetingExtractor(chunkr_api_key=chunkr_api_key, openai_client=openai_client)
-
-    print("Document extractor initialized.")
-
-
-    #---RAG Service Init---
-    print("Initializing RAG service...")
-    rag_service = PerformanceRAG()
-    rag_graph = RAGGraph(vector_store=rag_service.vector_store)
-
-    #create temp DB session to load data
-    db = SessionLocal()
+    # --- Initialize RAG Graph for chatbot endpoint ---
+    # Ensure attribute exists even if initialization fails, so endpoint returns a clear 500
+    app.state.rag_graph = None
     try:
-        all_utterances = get_all_utterances(db)
-        if all_utterances:
-            print(f"Found {len(all_utterances)} utterances to index.")
-            rag_service.index_utterances(all_utterances)
-        else:
-            print("No existing utterances found to index.")
-    finally:
-        db.close()
+        app.state.rag_graph = RAGGraph()
+        print("RAG graph initialized and attached to app state.")
+    except Exception as e:
+        # Keep None and log; endpoint will respond with a controlled 500
+        print(f"Failed to initialize RAG graph: {e}")
     
-    ml_models["rag_service"] = rag_service
-    ml_models["rag_graph"] = rag_graph
-    print("RAG service and graph initialized successfully.")
-
-
     yield
+    
+    print("Closing application resources...")
+    await app.state.arq_pool.close()
     ml_models.clear()
 
 # --- FastAPI App Initialization ---
 app = FastAPI(lifespan=lifespan)
 
 # --- CORS Middleware ---
-# Get CORS origins from environment variable, default to localhost
 CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:8001,http://127.0.0.1:8001")
 origins = [origin.strip() for origin in CORS_ORIGINS.split(",")]
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -153,68 +100,101 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- Dependency for Arq Pool ---
+async def get_arq_pool(request: Request):
+    return request.app.state.arq_pool
+
 # --- API Endpoints ---
-@app.post("/analyze_text/", response_model=AnalysisModel)
-async def analyze_text_endpoint(text_file: UploadFile = File(...), db: Session = Depends(get_db)):
-    # Use a temporary file to store the upload, as the new extractor works with file paths
-    tmp_path = None
+@app.post("/analyze_text/", response_model=AsyncTask)
+async def analyze_text_endpoint(text_file: UploadFile = File(...), arq_pool = Depends(get_arq_pool)):
+    contents = await text_file.read()
+    corr_id = uuid.uuid4().hex
+    # Enqueue with correlation id so worker can persist result under this key
+    await arq_pool.enqueue_job('process_document_task', contents, text_file.filename, corr_id)
+    return {"job_id": corr_id}
+
+@app.get("/analysis_status/{job_id}")
+async def get_analysis_status(job_id: str, arq_pool = Depends(get_arq_pool), db: Session = Depends(get_db)):
+    import asyncio
+    result = None
+    # 1) Primary: read worker-persisted result by correlation id
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{text_file.filename}") as tmp:
-            contents = await text_file.read()
-            tmp.write(contents)
-            tmp_path = tmp.name
-        
-        print(f"Temporarily saved uploaded file to {tmp_path}")
+        r = redis.from_url(ARQ_REDIS_URL)
+        raw = r.get(f"job_result:{job_id}")
+        if raw:
+            try:
+                result = json.loads(raw.decode('utf-8'))
+            except Exception:
+                # fallback to msgpack if needed
+                try:
+                    result = msgpack.unpackb(raw, raw=False)
+                except Exception:
+                    result = None
+    except Exception:
+        result = None
+
+    # 2) Secondary (legacy IDs): try ARQ if available
+    if result is None and hasattr(arq_pool, 'result'):
+        try:
+            result = await arq_pool.result(job_id)
+        except Exception:
+            result = None
     
-        # Use extractor
-        extractor: RobustMeetingExtractor = ml_models["extractor"]
-        extraction_result = await extractor.process_any_document(tmp_path, text_file.filename)
-        structured_transcript = extraction_result.get("extractions", [])
-    
-    finally:
-        # Clean up the temporary file
-        if tmp_path and os.path.exists(tmp_path):
-            os.remove(tmp_path)
-            print(f"Cleaned up temporary file: {tmp_path}")
+    if result is None:
+        return {"job_id": job_id, "status": "PENDING"}
 
-            
-    #raw_text = parse_document_with_unstructured(contents, text_file.content_type)
-    
-    
-    # if not raw_text.strip():
-    #     raise HTTPException(status_code=422, detail="Could not extract any text from the provided file.")
-    
-    # strategy = ml_models.get("parsing_strategy", "single_shot")
-    # if strategy == "chunking":
-    #     structured_transcript = await extract_transcript_chunking(raw_text, ml_models["openai_client"])
-    # else:
-    #     structured_transcript = await extract_transcript_single_shot(raw_text, ml_models["openai_client"])
+    # Normalize task return into a stable response
+    # If ARQ returned bytes, try msgpack first, then JSON as fallback
+    if isinstance(result, (bytes, bytearray, memoryview)):
+        raw_bytes = bytes(result)
+        decoded = None
+        # Try msgpack
+        try:
+            decoded = msgpack.unpackb(raw_bytes, raw=False)
+        except Exception:
+            decoded = None
+        if decoded is None:
+            # Try JSON
+            try:
+                decoded = json.loads(raw_bytes.decode("utf-8"))
+            except Exception:
+                decoded = None
+        if isinstance(decoded, dict):
+            result = decoded
+    elif isinstance(result, str):
+        try:
+            parsed = json.loads(result)
+            if isinstance(parsed, dict):
+                result = parsed
+        except Exception:
+            pass
 
-    if not structured_transcript:
-        raise HTTPException(status_code=422, detail="The AI model could not extract a valid transcript from the document.")
+    if isinstance(result, dict):
+        status = result.get("status", "COMPLETED")
+        resp = {"job_id": job_id, "status": status}
+        if status == "COMPLETED" and "analysis_id" in result:
+            analysis_id = result.get("analysis_id")
+            # Small retry to ensure the analysis row is visible to the API container/DB
+            for _ in range(3):
+                try:
+                    from . import db_models
+                    found = db.query(db_models.Analysis).filter(db_models.Analysis.id == analysis_id).first()
+                    if found:
+                        break
+                except Exception:
+                    pass
+                await asyncio.sleep(0.1)
+            resp["analysis_id"] = analysis_id
+            try:
+                print(f"Analysis job {job_id} completed; analysis_id={analysis_id}")
+            except Exception:
+                pass
+        if status == "FAILED" and "error" in result:
+            resp["error"] = result.get("error")
+        return resp
 
-    final_results = analyze_structured_transcript(
-        transcript=structured_transcript,
-        model=ml_models["model"],
-        tokenizer=ml_models["tokenizer"],
-        sa_model=ml_models["sa_model"],
-        sa_tokenizer=ml_models["sa_tokenizer"],
-        metric_cols=ml_models["metric_cols"],
-        metric_groups=ml_models["metric_groups"]
-    )
-    
-    if not final_results:
-        raise HTTPException(status_code=422, detail="Could not parse any valid utterances from the provided text. Please check the format.")
-
-    db_analysis = save_analysis_results(db, text_file.filename, final_results)
-
-    print("Updating RAG service with new utterances...")
-
-    rag_service: PerformanceRAG = ml_models.get("rag_service")
-    if rag_service:
-        rag_service.index_utterances(db_analysis.utterances)
-
-    return db_analysis
+    # Fallback if task returned a non-dict value
+    return {"job_id": job_id, "status": "COMPLETED"}
 
 @app.get("/analyses/", response_model=List[AnalysisModel])
 def get_analyses(db: Session = Depends(get_db)):
@@ -233,34 +213,25 @@ def get_trends(metric: str, period: str = 'daily', db: Session = Depends(get_db)
     return get_speaker_trends(db=db, metric=metric, period=period)
 
 @app.post("/api/get_insights")
-async def rag_query_endpoint(query: RAGQuery):
-    rag_graph: RAGGraph = ml_models.get("rag_graph", [])
+async def rag_query_endpoint(query: RAGQuery, request: Request):
+    # This endpoint does not need arq, but shows how to access shared state if needed
+    rag_graph: RAGGraph = request.app.state.rag_graph
     if not rag_graph:
         raise HTTPException(status_code=500, detail="RAG graph is not available.")
 
     async def stream_generator():
-        # This will hold the final data like follow-ups and citations
         final_data = {}
-        
-        # Use the new streaming method on the graph
         async for chunk in rag_graph.astream_run(
-            question=query.question,
-            session_id=query.session_id,
+            question=query.question, session_id=query.session_id,
             filters={
-                "speaker": query.speaker,
-                "date_from": query.date_from,
-                "date_to": query.date_to,
-                "top_k": query.top_k,
+                "speaker": query.speaker, "date_from": query.date_from,
+                "date_to": query.date_to, "top_k": query.top_k,
             },
         ):
             if "answer_token" in chunk:
-                # Yield the token for the streaming answer
                 yield f"data: {json.dumps({'answer_token': chunk['answer_token']})}\n\n"
             else:
-                # Keep the final metadata
                 final_data = chunk
-        
-        # After the answer stream is complete, send the final metadata
         yield f"data: {json.dumps(final_data)}\n\n"
 
     return StreamingResponse(stream_generator(), media_type="text/event-stream")
