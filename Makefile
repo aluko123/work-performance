@@ -1,8 +1,8 @@
 SHELL := /bin/bash
 
-.PHONY: help setup dev front docker-up docker-down smoke
+.PHONY: help setup dev front docker-up docker-down smoke test test-cov test-docker test-cov-docker
 
-help:
+	help:
 	@echo "Targets:"
 	@echo "  setup       Create venv and install requirements"
 	@echo "  dev         Run backend (uvicorn --reload on :8000)"
@@ -12,6 +12,8 @@ help:
 	@echo "  smoke       Basic API curl checks"
 	@echo "  test        Run pytest offline"
 	@echo "  test-cov    Run pytest with coverage report"
+	@echo "  test-docker Run pytest inside backend container"
+	@echo "  test-cov-docker Run pytest+cov inside backend container"
 	@echo "  migrate     Run alembic upgrade head (local)"
 	@echo "  docker-migrate  Run one-shot migrate service"
 
@@ -43,6 +45,12 @@ test:
 
 test-cov:
 	pytest -q --cov=backend --cov-report=term-missing backend/tests
+
+test-docker:
+	docker compose run --rm backend pytest -q backend/tests
+
+test-cov-docker:
+	docker compose run --rm backend pytest -q --cov=backend --cov-report=term-missing backend/tests
 
 db-migrate:
 	docker compose exec backend alembic revision --autogenerate -m "$(m)"

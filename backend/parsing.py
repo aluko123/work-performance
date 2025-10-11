@@ -4,6 +4,11 @@ import asyncio
 from typing import List, Dict, Any
 from openai import AsyncOpenAI
 from unstructured.partition.auto import partition
+from .prompts import (
+    single_shot_system,
+    single_shot_user,
+    chunk_system,
+)
 
 async def extract_transcript_single_shot(raw_text: str, client: AsyncOpenAI) -> list:
     """
@@ -11,20 +16,14 @@ async def extract_transcript_single_shot(raw_text: str, client: AsyncOpenAI) -> 
     Works for moderately sized documents.
     """
     print("Extracting transcript using 'single_shot' strategy...")
-    system_prompt = (
-        "You are an expert data extraction assistant. Your task is to analyze the provided text "
-        "from a meeting transcript document and extract every utterance. For each utterance, you must identify "
-        "the speaker, the time, and the date of the utterance. Format your output as a single JSON object with a key 'transcript', "
-        "which contains a list of objects. Each object in the list must have the following keys with this exact capitalization: 'Date', 'Timestamp', 'Speaker', 'Utterance'. "
-        "If you cannot find a value for a key, use a null value."
-    )
+    system_prompt = single_shot_system()
 
     try:
         response = await client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": raw_text},
+                {"role": "user", "content": single_shot_user(raw_text)},
             ],
             response_format={"type": "json_object"},
             max_tokens=16384
@@ -65,12 +64,7 @@ def _split_text(text: str, chunk_size: int = 8000, overlap: int = 200) -> List[s
 
 async def _process_chunk(chunk: str, client: AsyncOpenAI) -> List[Dict[str, Any]]:
     """Helper function to process a single text chunk with OpenAI."""
-    system_prompt = (
-        "You are an expert data extraction assistant. The user will provide a chunk of text from a larger meeting transcript. "
-        "Your task is to find and extract every distinct utterance from this chunk. For each utterance, you must identify the speaker, the time, and the utterance text. "
-        "Format your output as a single JSON object with a key 'utterances', which contains a list of objects. "
-        "Each object must have the following keys with this exact capitalization: 'Timestamp', 'Speaker', 'Utterance'."
-    )
+    system_prompt = chunk_system()
     try:
         response = await client.chat.completions.create(
             model="gpt-4o-mini",
@@ -118,4 +112,3 @@ def parse_document_with_unstructured(file_content: bytes, content_type: str) -> 
     except Exception as e:
         print(f"Error parsing document with unstructured: {e}")
         return ""
-

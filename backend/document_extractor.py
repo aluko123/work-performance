@@ -8,6 +8,12 @@ from openai import AsyncOpenAI
 from datetime import datetime
 import re
 from . import utils
+from .prompts import (
+    system_date_expert,
+    global_date_user_prompt,
+    system_data_extractor,
+    adaptive_chunk_user_prompt,
+)
 
 class RobustMeetingExtractor:
     def __init__(self, chunkr_api_key: Optional[str], openai_client: AsyncOpenAI):
@@ -76,13 +82,13 @@ class RobustMeetingExtractor:
     async def _extract_global_context(self, elements: List) -> Dict:
         print("Extracting global context from document header...")
         header_text = "\n".join([str(el) for el in elements[:10]])
-        prompt = f'''From the following text, which is the header of a document, extract the single, primary date of the meeting. Return JSON with one key, 'meeting_date'. If no date is found, return null.\n\nTEXT: {header_text}'''
+        prompt = global_date_user_prompt(header_text)
         try:
             response = await self.llm_client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
-                    {"role": "system", "content": "You are a date extraction expert."}, 
-                    {"role": "user", "content": prompt}
+                    {"role": "system", "content": system_date_expert()},
+                    {"role": "user", "content": prompt},
                 ],
                 response_format={"type": "json_object"}
             )
@@ -131,12 +137,7 @@ class RobustMeetingExtractor:
 
     def build_adaptive_prompt(self, chunk: Dict, chunk_id: int, global_context: Optional[Dict]) -> str:
         global_date_hint = global_context.get('date') if global_context else None
-        date_prompt = f"The primary date for the entire document is likely {global_date_hint}. " if global_date_hint else ""
-        date_prompt += "For each utterance, determine its specific date. If a date is mentioned in the chunk, use it. If no date is mentioned, use the primary document date if available, otherwise use null."
-        
-        base_prompt = f"""{date_prompt}\n\nCHUNK {chunk_id}: Extract meeting data from this text.\n\nCONTENT:\n{chunk['content'][:8000]}\n\nLook for: Timestamps, Speaker names, and what each person said (utterances)."""
-        base_prompt += "\n\nReturn JSON array ONLY of objects with keys \"date\", \"timestamp\", \"speaker\", \"utterance\"."
-        return base_prompt
+        return adaptive_chunk_user_prompt(chunk.get('content', ''), chunk_id, global_date_hint)
 
     async def llm_extract_with_retry(self, prompt: str, max_retries: int = 2) -> List[Dict]:
         for attempt in range(max_retries):
@@ -144,8 +145,8 @@ class RobustMeetingExtractor:
                 response = await self.llm_client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[
-                        {"role": "system", "content": "You are an expert data extractor. Output JSON only."}, 
-                        {"role": "user", "content": prompt}
+                        {"role": "system", "content": system_data_extractor()},
+                        {"role": "user", "content": prompt},
                     ],
                     response_format={"type": "json_object"}
                 )
