@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, TypedDict, AsyncGenerator
 import redis
 from langchain.chains import RetrievalQA
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain.schema import Document
+from langchain.schema import Document, AIMessage
 from langchain.vectorstores import Chroma
 from langgraph.graph import StateGraph
 from langchain.schema.runnable import Runnable, RunnableConfig
@@ -16,6 +16,18 @@ from langchain.prompts import ChatPromptTemplate
 from . import db_models
 from .database import SessionLocal
 from .models import RAGAnswer, RAGCitation
+from .prompts import (
+    answer_system,
+    answer_user_template,
+    metadata_system,
+    metadata_user_template,
+)
+
+# --- Constants ---
+REDIS_URL = os.getenv("REDIS_URL") or os.getenv("ARQ_REDIS_URL") or "redis://redis:6379/0"
+LLM_MODEL_NAME = "gpt-4o-mini"
+LLM_TEMPERATURE = 0.2
+CHROMA_DIR = os.getenv("CHROMA_DIR", "./data/chroma_db")
 
 
 class GraphState(TypedDict):
@@ -33,20 +45,9 @@ class GraphState(TypedDict):
 
 
 def _redis_client() -> Optional[redis.Redis]:
-    """Return a Redis client if available; otherwise None.
-
-    - Uses `REDIS_URL` if set, otherwise falls back to `ARQ_REDIS_URL`,
-      otherwise to a Docker-friendly default `redis://redis:6379/0`.
-    - Pings the server to validate connectivity; returns None on failure.
-    """
-    url = (
-        os.getenv("REDIS_URL")
-        or os.getenv("ARQ_REDIS_URL")
-        or "redis://redis:6379/0"
-    )
+    """Return a Redis client if available; otherwise None."""
     try:
-        client = redis.from_url(url)
-        # Validate connection early; if it fails, treat as unavailable
+        client = redis.from_url(REDIS_URL)
         client.ping()
         return client
     except Exception:
@@ -163,8 +164,8 @@ def compute_aggregates(state: GraphState) -> GraphState:
 def make_llm(json_mode: bool = False) -> ChatOpenAI:
     model_kwargs = {"response_format": {"type": "json_object"}} if json_mode else {}
     return ChatOpenAI(
-        model_name="gpt-4o-mini",
-        temperature=0.2,
+        model_name=LLM_MODEL_NAME,
+        temperature=LLM_TEMPERATURE,
         model_kwargs=model_kwargs,
     )
 
@@ -192,39 +193,23 @@ def _prepare_context(state: GraphState) -> Dict[str, Any]:
 
 
 def _get_answer_chain(json_mode: bool = False) -> Runnable:
-    system = (
-        "You are an assistant producing concise, evidence-backed performance insights. "
-        "First, provide a direct, narrative answer to the user's question based on the provided context. "
-        "Your answer should be grounded in the data and citations provided."
-    )
-    if json_mode:
-        system += (
-            " After your narrative answer, you MUST provide a JSON object with keys: "
-            "'bullets', 'metrics_summary', 'follow_ups', and 'source_ids'. "
-            "You MUST include 'source_ids' as a list of integers that reference the provided citations' source_id values. "
-            "Do NOT invent IDs. If uncertain, pick the closest citation and include its source_id. "
-            "The final output MUST be a single JSON object containing both 'answer' and the other keys."
-        )
-
+    system_msg = answer_system(json_mode=json_mode)
+    user_tmpl = answer_user_template()
     prompt = ChatPromptTemplate.from_messages([
-        ("system", system),
-        ("user", 
-            "Question: {question}\n"
-            "Analysis type: {analysis_type}\n"
-            "Aggregates (sample size, averages): {aggregates}\n"
-            "Citations (for reference): {citations}\n"
-            "Valid citation source_ids: {valid_source_ids}\n"
-            "Constraints: <=120 words in 'answer'; 3-5 bullets; 2-4 follow_ups."
-        )
+        ("system", system_msg),
+        ("user", user_tmpl),
     ])
     return prompt | make_llm(json_mode=json_mode)
 
 
-def _parse_llm_output(content: str, state: GraphState) -> GraphState:
-    try:
-        data = json.loads(content)
-    except json.JSONDecodeError:
-        data = {"answer": content, "bullets": [], "metrics_summary": [], "follow_ups": []}
+def _parse_llm_output(content: str | dict, state: GraphState) -> GraphState:
+    if isinstance(content, str):
+        try:
+            data = json.loads(content)
+        except json.JSONDecodeError:
+            data = {"answer": content, "bullets": [], "metrics_summary": [], "follow_ups": []}
+    else:
+        data = content
 
     # Basic validation and fallback for source IDs
     valid_source_ids = [c["source_id"] for c in state.get("_citations", []) if c.get("source_id") is not None]
@@ -293,7 +278,7 @@ def format_answer(state: GraphState) -> GraphState:
 class RAGGraph:
     def __init__(self, vector_store: Optional[Chroma] = None):
         self.vector_store = vector_store or Chroma(
-            persist_directory=os.getenv("CHROMA_DIR", "./data/chroma_db"),
+            persist_directory=CHROMA_DIR,
             embedding_function=OpenAIEmbeddings(),
         )
         self.retriever = build_retriever(self.vector_store)
@@ -349,14 +334,8 @@ class RAGGraph:
         
         # Refine the prompt for the metadata call
         metadata_prompt = ChatPromptTemplate.from_messages([
-            ("system", "Given the user's question and the provided answer, generate the associated metadata. Return ONLY a single JSON object with keys: 'bullets', 'metrics_summary', 'follow_ups', and 'source_ids'."),
-            ("user", 
-                "Question: {question}\n"
-                "Answer: {answer}\n"
-                "Citations (for reference): {citations}\n"
-                "Valid citation source_ids: {valid_source_ids}\n"
-                "Constraints: 3-5 bullets; 2-4 follow_ups; 'source_ids' must be a list of integers from the valid IDs."
-            )
+            ("system", metadata_system()),
+            ("user", metadata_user_template()),
         ])
         
         final_chain = metadata_prompt | make_llm(json_mode=True)
