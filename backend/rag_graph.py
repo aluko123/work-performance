@@ -5,13 +5,13 @@ import os
 from typing import Any, Dict, List, Optional, TypedDict, AsyncGenerator
 
 import redis
-from langchain.chains import RetrievalQA
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain.schema import Document, AIMessage
-from langchain.vectorstores import Chroma
+from langchain_core.documents import Document
+from langchain_core.messages import AIMessage
+from langchain_community.vectorstores import Chroma
 from langgraph.graph import StateGraph
-from langchain.schema.runnable import Runnable, RunnableConfig
-from langchain.prompts import ChatPromptTemplate
+from langchain_core.runnables import Runnable, RunnableConfig
+from langchain_core.prompts import ChatPromptTemplate
 
 from . import db_models
 from .database import SessionLocal
@@ -117,7 +117,7 @@ def build_retriever(vector_store: Chroma):
 def retrieve_docs(state: GraphState, retriever) -> GraphState:
     q = state["question"]
     top_k = int(state.get("filters", {}).get("top_k", 8))
-    docs: List[Document] = retriever.get_relevant_documents(q)
+    docs: List[Document] = retriever.invoke(q)
     state["retrieved"] = docs[:top_k]
     return state
 
