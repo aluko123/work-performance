@@ -76,11 +76,11 @@ def test_compute_aggregates(temp_db_session, monkeypatch):
 
 def test_retrieve_docs():
     mock_retriever = MagicMock()
-    mock_retriever.get_relevant_documents.return_value = [Document(page_content="doc1"), Document(page_content="doc2")]
+    mock_retriever.invoke.return_value = [Document(page_content="doc1"), Document(page_content="doc2")]
     state = {"question": "test", "filters": {"top_k": 1}}
     out = rg.retrieve_docs(state, mock_retriever)
     assert len(out["retrieved"]) == 1
-    mock_retriever.get_relevant_documents.assert_called_once_with("test")
+    mock_retriever.invoke.assert_called_once_with("test")
 
 
 ## Removed flaky integration test that asserted citations strictly from LLM output.
@@ -93,7 +93,7 @@ def test_rag_graph_analysis_paths(mock_build_retriever, mock_make_llm, temp_db_s
     monkeypatch.setattr(rg, "SessionLocal", temp_db_session)
     monkeypatch.setattr(rg, "_redis_client", lambda: fake_redis_client)
     mock_retriever = MagicMock()
-    mock_retriever.get_relevant_documents.return_value = []
+    mock_retriever.invoke.return_value = []
     mock_build_retriever.return_value = mock_retriever
     
     mock_llm = MagicMock()

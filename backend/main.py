@@ -2,7 +2,7 @@ import pandas as pd
 import torch
 import json
 import uuid
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Request
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Request, Query
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -10,11 +10,12 @@ import os
 import tempfile
 from openai import AsyncOpenAI
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from typing import List
 from transformers import BertModel
 import redis
-from langchain.cache import RedisCache
-from langchain.globals import set_llm_cache
+from langchain_community.cache import RedisCache
+from langchain_core.globals import set_llm_cache
 from arq import create_pool
 from arq.connections import RedisSettings
 import msgpack
@@ -22,7 +23,7 @@ import msgpack
 # Local imports
 from . import db_models
 from .database import SessionLocal, init_db
-from .models import Analysis as AnalysisModel, MultiTaskBertModel, TrendsResponse, RAGQuery, RAGAnswer, AsyncTask
+from .models import Analysis as AnalysisModel, AnalysesResponse, MultiTaskBertModel, TrendsResponse, RAGQuery, RAGAnswer, AsyncTask
 from .services import get_speaker_trends
 from .document_extractor import RobustMeetingExtractor
 from .rag_service import PerformanceRAG
@@ -66,7 +67,29 @@ async def lifespan(app: FastAPI):
     print("Enqueued startup indexing task.")
 
     # --- Caching, Model Loading, etc. (remains the same) ---
-    # ... (rest of the original lifespan logic for model loading)
+    # Initialize LangChain LLM cache (Redis) for deterministic caching of LLM calls
+    try:
+        import redis as _redis
+        redis_cache_url = os.getenv("REDIS_URL") or os.getenv("ARQ_REDIS_URL") or "redis://redis:6379/0"
+        cache = None
+        # Try community helper if available
+        try:
+            cache = RedisCache.from_url(redis_cache_url)  # type: ignore[attr-defined]
+        except Exception:
+            client = _redis.from_url(redis_cache_url)
+            # Try possible constructor signatures across versions
+            try:
+                cache = RedisCache(client)
+            except TypeError:
+                cache = RedisCache(redis_client=client)  # type: ignore[call-arg]
+        if cache is not None:
+            set_llm_cache(cache)
+            print(f"LangChain LLM cache configured with Redis at {redis_cache_url}")
+        else:
+            print("Warning: could not initialize RedisCache (unknown constructor).")
+    except Exception as e:
+        print(f"Warning: failed to set LangChain LLM cache: {e}")
+
     print("Loading models and other resources...")
     # NOTE: The original blocking indexing logic is now removed from here.
 
@@ -196,10 +219,33 @@ async def get_analysis_status(job_id: str, arq_pool = Depends(get_arq_pool), db:
     # Fallback if task returned a non-dict value
     return {"job_id": job_id, "status": "COMPLETED"}
 
-@app.get("/analyses/", response_model=List[AnalysisModel])
-def get_analyses(db: Session = Depends(get_db)):
-    analyses = db.query(db_models.Analysis).order_by(db_models.Analysis.created_at.desc()).all()
-    return analyses
+@app.get("/analyses/", response_model=AnalysesResponse)
+def get_analyses(
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db)
+):
+    offset = (page - 1) * limit
+
+    # Get total count
+    total = db.query(func.count(db_models.Analysis.id)).scalar()
+
+    # Get paginated analyses
+    analyses = db.query(db_models.Analysis)\
+        .order_by(db_models.Analysis.created_at.desc())\
+        .offset(offset)\
+        .limit(limit)\
+        .all()
+
+    has_more = offset + len(analyses) < total
+
+    return {
+        "items": analyses,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "has_more": has_more
+    }
 
 @app.get("/analyses/{analysis_id}", response_model=AnalysisModel)
 def get_analysis(analysis_id: int, db: Session = Depends(get_db)):

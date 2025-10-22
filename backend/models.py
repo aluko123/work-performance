@@ -31,6 +31,13 @@ class Analysis(BaseModel):
     class Config:
         from_attributes = True
 
+class AnalysesResponse(BaseModel):
+    items: List[Analysis]
+    total: int
+    page: int
+    limit: int
+    has_more: bool
+
 class AsyncTask(BaseModel):
     job_id: str
 
