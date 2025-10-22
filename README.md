@@ -236,7 +236,7 @@ This section expands the high-level design with implementation-level details, ma
 ### System Overview
 
 - Components
-  - `frontend-v2/`: React + Vite SPA for uploading files, viewing analyses, and chatting with the RAG assistant. `frontend/` contains an earlier static prototype.
+  - `frontend-v2/`: React + Vite App for uploading files, viewing analyses, and chatting with the RAG assistant. `frontend/` contains an earlier static prototype.
   - `backend/`: FastAPI app exposing REST APIs; background jobs via `arq`; RAG using LangChain + Chroma; SQLite by default.
   - `data/`: SQLite database (`data/analysis.db`) and Chroma persistence (`data/chroma_db/`). Large models/data are mounted here in Docker.
 
