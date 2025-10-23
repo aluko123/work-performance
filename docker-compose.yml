@@ -26,6 +26,10 @@ services:
     volumes:
       - ./bert_classification:/app/bert_classification
       - ./data:/app/data
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined
     depends_on:
       migrate:
         condition: service_completed_successfully

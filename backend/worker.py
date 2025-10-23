@@ -7,6 +7,7 @@ import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, BertModel
 from sqlalchemy.orm import Session
 from arq.connections import RedisSettings
+from openai import AsyncOpenAI
 
 # Assuming these modules and functions are available in the project's path
 from .database import SessionLocal
@@ -17,6 +18,57 @@ from .models import MultiTaskBertModel
 from .db_models import Utterance
 
 
+async def startup(ctx):
+    """
+    ARQ startup hook - loads models once per worker and stores in context.
+    This prevents reloading 500MB+ of models for every job.
+    """
+    print("🚀 ARQ Worker starting up - preloading models...")
+    
+    MODEL_PATH = os.getenv('MODEL_PATH', 'bert_classification/multi_task_bert_model.pth')
+    DATA_PATH = os.getenv('DATA_PATH', 'bert_classification/master_training_data.csv')
+    CONFIG_PATH = os.getenv('CONFIG_PATH', 'backend/config/metric_groups.json')
+    SA_MODEL_PATH = os.getenv('SA_MODEL_PATH', 'bert_classification/sa_bert_model_multilabel/')
+    
+    df = pd.read_csv(DATA_PATH)
+    metric_cols = [col for col in df.columns if col.startswith(('comm_', 'feedback_', 'deviation_', 'sqdcp_'))]
+    n_classes = {col: 5 for col in metric_cols}
+    
+    base_bert_model = BertModel.from_pretrained('bert-base-uncased')
+    model = MultiTaskBertModel(n_classes, base_bert_model)
+    model.load_state_dict(torch.load(MODEL_PATH, map_location=torch.device('cpu')))
+    model.eval()
+    
+    tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')
+    
+    sa_tokenizer = AutoTokenizer.from_pretrained(SA_MODEL_PATH)
+    sa_model = AutoModelForSequenceClassification.from_pretrained(SA_MODEL_PATH)
+    sa_model.eval()
+    
+    with open(CONFIG_PATH, 'r') as f:
+        metric_groups = json.load(f)
+    
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    openai_client = AsyncOpenAI(api_key=openai_api_key)
+    
+    ctx['model'] = model
+    ctx['tokenizer'] = tokenizer
+    ctx['sa_model'] = sa_model
+    ctx['sa_tokenizer'] = sa_tokenizer
+    ctx['metric_cols'] = metric_cols
+    ctx['metric_groups'] = metric_groups
+    ctx['openai_client'] = openai_client
+    
+    print(f"✅ Models preloaded: {len(metric_cols)} metrics configured")
+
+
+async def shutdown(ctx):
+    """
+    ARQ shutdown hook - cleanup if needed.
+    """
+    print("🛑 ARQ Worker shutting down...")
+
+
 async def process_document_task(ctx, file_contents: bytes, filename: str, corr_id: str):
     """
     Arq task to process a document, save analysis, and enqueue indexing.
@@ -25,33 +77,18 @@ async def process_document_task(ctx, file_contents: bytes, filename: str, corr_i
     db: Session = SessionLocal()
     redis = ctx['redis']
 
-    # --- Configuration (should be managed better in a real app) ---
-    MODEL_PATH = os.getenv('MODEL_PATH', 'bert_classification/multi_task_bert_model.pth')
-    DATA_PATH = os.getenv('DATA_PATH', 'bert_classification/master_training_data.csv')
-    CONFIG_PATH = os.getenv('CONFIG_PATH', 'backend/config/metric_groups.json')
-    SA_MODEL_PATH = os.getenv('SA_MODEL_PATH', 'bert_classification/sa_bert_model_multilabel/')
-
     try:
-        # --- 1. Load Models and Tokenizers (within the task) ---
-        df = pd.read_csv(DATA_PATH)
-        metric_cols = [col for col in df.columns if col.startswith(('comm_', 'feedback_', 'deviation_', 'sqdcp_'))]
-        n_classes = {col: 5 for col in metric_cols}
-        base_bert_model = BertModel.from_pretrained('bert-base-uncased')
-        model = MultiTaskBertModel(n_classes, base_bert_model)
-        model.load_state_dict(torch.load(MODEL_PATH, map_location=torch.device('cpu')))
-        model.eval()
-        tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')
-        sa_tokenizer = AutoTokenizer.from_pretrained(SA_MODEL_PATH)
-        sa_model = AutoModelForSequenceClassification.from_pretrained(SA_MODEL_PATH)
-        sa_model.eval()
-        with open(CONFIG_PATH, 'r') as f:
-            metric_groups = json.load(f)
+        # --- 1. Get Preloaded Models from Context ---
+        model = ctx['model']
+        tokenizer = ctx['tokenizer']
+        sa_model = ctx['sa_model']
+        sa_tokenizer = ctx['sa_tokenizer']
+        metric_cols = ctx['metric_cols']
+        metric_groups = ctx['metric_groups']
+        openai_client = ctx['openai_client']
 
         # --- 2. Extract Content from Document ---
-        openai_api_key = os.getenv("OPENAI_API_KEY")
         chunkr_api_key = os.getenv("CHUNKRAI_API_KEY")
-        from openai import AsyncOpenAI
-        openai_client = AsyncOpenAI(api_key=openai_api_key)
         extractor = RobustMeetingExtractor(chunkr_api_key=chunkr_api_key, openai_client=openai_client)
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{filename}") as tmp:
@@ -178,6 +215,7 @@ async def startup_indexing_task(ctx):
 
 class WorkerSettings:
     redis_settings = RedisSettings.from_dsn(os.getenv("ARQ_REDIS_URL", "redis://localhost:6379"))
-    # keep results in Redis long enough for the API to poll them
-    keep_result = 3600  # seconds
+    keep_result = 3600
     functions = [process_document_task, index_utterances_task, startup_indexing_task]
+    on_startup = startup
+    on_shutdown = shutdown

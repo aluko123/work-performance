@@ -395,3 +395,14 @@ This section expands the high-level design with implementation-level details, ma
 - sanitize response
 - optimize AI section, evals, streamlit setup
 - getting data from Polaris
+
+
+
+docker compose exec backend py-spy record -o /app/data/profile.svg --duration 60 --pid 1
+
+for i in {1..50}; do curl -F "text-file=@sample_meeting.txt" http://localhost:8000/analyze_text/ & done
+
+
+docker compose exec backend py-spy record -o /app/data/inference_profile.svg --duration 120 --pid 1
+
+./load_test.sh
