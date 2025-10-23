@@ -9,3 +9,5 @@ Here is a list of the agent functions present in the RAG implementation:
 - `draft`: Generates a draft response.
 - `format`: Formats the final answer.
 - `save_history`: Saves the conversation history.
+
+

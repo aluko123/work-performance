@@ -24,12 +24,6 @@ async def process_document_task(ctx, file_contents: bytes, filename: str, corr_i
     print(f"Starting document processing for: {filename}")
     db: Session = SessionLocal()
     redis = ctx['redis']
-    try:
-        ctx_keys = list(ctx.keys()) if isinstance(ctx, dict) else []
-        print(f"ARQ ctx keys: {ctx_keys}")
-        print(f"ARQ ctx job_id: {ctx.get('job_id') if isinstance(ctx, dict) else None}")
-    except Exception:
-        pass
 
     # --- Configuration (should be managed better in a real app) ---
     MODEL_PATH = os.getenv('MODEL_PATH', 'bert_classification/multi_task_bert_model.pth')

@@ -5,6 +5,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import './index.css'
 import App from './App.tsx'
 import { ThemeProvider } from './components/theme-provider'
+import { UploadProvider } from './contexts/UploadContext'
+import { AppStateProvider } from './contexts/AppStateContext'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -19,9 +21,13 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <ThemeProvider defaultTheme="dark" storageKey="work-analytics-theme">
-        <BrowserRouter>
-          <App />
-        </BrowserRouter>
+        <AppStateProvider>
+          <UploadProvider>
+            <BrowserRouter>
+              <App />
+            </BrowserRouter>
+          </UploadProvider>
+        </AppStateProvider>
       </ThemeProvider>
     </QueryClientProvider>
   </StrictMode>,

@@ -3,17 +3,16 @@ import { useQueryClient } from '@tanstack/react-query';
 import { FileUpload } from '../components/FileUpload';
 import { AnalysisDisplay } from '../components/AnalysisDisplay';
 import { RAGQuery } from '../components/RAGQuery';
-import { ProfileRadar } from '../components/ProfileRadar';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { AlertCircle, Loader2 } from 'lucide-react';
 import { Alert, AlertDescription } from '../components/ui/alert';
-import type { Analysis, ColumnMapping } from '../lib/types';
+import { useAppState } from '../contexts/AppStateContext';
+import type { ColumnMapping } from '../lib/types';
 
 export default function UploadView() {
   const queryClient = useQueryClient();
-  const [analysisResult, setAnalysisResult] = useState<Analysis | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { state, setUploadAnalysisResult, setUploadIsLoading, setUploadError } = useAppState();
+  const { uploadAnalysisResult: analysisResult, uploadIsLoading: isLoading, uploadError: error } = state;
   const [columnMapping, setColumnMapping] = useState<ColumnMapping>({});
 
   useEffect(() => {
@@ -24,10 +23,10 @@ export default function UploadView() {
         setColumnMapping(data);
       } catch (err) {
         console.error('Failed to fetch column mapping:', err);
-        setError('Could not load column name mapping. Headers may be incorrect.');
+        setUploadError('Could not load column name mapping. Headers may be incorrect.');
       }
     })();
-  }, []);
+  }, [setUploadError]);
 
   return (
     <div className="space-y-8">
@@ -41,11 +40,11 @@ export default function UploadView() {
       <div className="grid gap-8 lg:grid-cols-3">
         <div className="lg:col-span-1">
           <FileUpload
-            setIsLoading={setIsLoading}
-            setError={setError}
-            setAnalysis={setAnalysisResult}
+            setIsLoading={setUploadIsLoading}
+            setError={setUploadError}
+            setAnalysis={setUploadAnalysisResult}
             onCompleted={(a) => {
-            setAnalysisResult(a);
+            setUploadAnalysisResult(a);
             // Invalidate analyses cache to show the new analysis
             queryClient.invalidateQueries({ queryKey: ['analyses'] });
           }}
@@ -73,18 +72,6 @@ export default function UploadView() {
 
           {analysisResult && (
             <>
-              <Card>
-                <CardHeader>
-                  <CardTitle>Performance Profile</CardTitle>
-                  <CardDescription>
-                    Overall communication and situational awareness scores
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <ProfileRadar analysis={analysisResult} />
-                </CardContent>
-              </Card>
-
               <Card>
                 <CardHeader>
                   <CardTitle>Detailed Analysis</CardTitle>
