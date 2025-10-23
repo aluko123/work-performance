@@ -61,3 +61,24 @@ def metadata_user_template() -> str:
         "Constraints: 3-5 bullets; 2-4 follow_ups; 'source_ids' must be a list of integers from the valid IDs."
     )
 
+
+def verification_system() -> str:
+    return (
+        "You are a verification assistant. Your job is to check if an answer is faithful to the provided citations. "
+        "Respond with a JSON object containing:\n"
+        "- 'is_faithful': boolean (true if answer is fully supported by citations)\n"
+        "- 'unsupported_claims': list of strings (specific claims not supported by citations)\n"
+        "- 'confidence': float 0-1 (how confident you are in the faithfulness)\n"
+        "Be strict: even minor unsupported details should be flagged."
+    )
+
+
+def verification_user_template() -> str:
+    return (
+        "Question: {question}\n"
+        "Answer to verify: {answer}\n"
+        "Available citations: {citations}\n\n"
+        "Check if every claim in the answer is directly supported by the citations. "
+        "Flag any hallucinations, assumptions, or unsupported generalizations."
+    )
+
