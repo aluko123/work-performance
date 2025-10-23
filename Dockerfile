@@ -5,7 +5,13 @@ FROM python:3.10-slim
 WORKDIR /app
 
 # Install system dependencies required for PDF parsing by unstructured.io
-RUN apt-get update && apt-get install -y libgl1 libglib2.0-0 libsm6 libxext6
+# Added procps for process monitoring tools
+RUN apt-get update && apt-get install -y libgl1 libglib2.0-0 libsm6 libxext6 procps
+
+# Enable ptrace capability for py-spy profiling
+# This allows py-spy to attach to Python processes
+RUN apt-get install -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy the requirements file into the container at /app
 COPY requirements.txt .

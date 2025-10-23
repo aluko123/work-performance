@@ -13,6 +13,8 @@ from .rag import (
     answer_user_template,
     metadata_system,
     metadata_user_template,
+    verification_system,
+    verification_user_template,
 )
 
 __all__ = [

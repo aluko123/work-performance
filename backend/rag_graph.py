@@ -21,12 +21,14 @@ from .prompts import (
     answer_user_template,
     metadata_system,
     metadata_user_template,
+    verification_system,
+    verification_user_template,
 )
 
 # --- Constants ---
 REDIS_URL = os.getenv("REDIS_URL") or os.getenv("ARQ_REDIS_URL") or "redis://redis:6379/0"
 LLM_MODEL_NAME = "gpt-4o-mini"
-LLM_TEMPERATURE = 0.2
+LLM_TEMPERATURE = 0.1  # Lower temperature for more faithful, deterministic responses
 CHROMA_DIR = os.getenv("CHROMA_DIR", "./data/chroma_db")
 
 
@@ -111,14 +113,30 @@ def classify_query(state: GraphState) -> GraphState:
 
 
 def build_retriever(vector_store: Chroma):
-    return vector_store.as_retriever(search_type="mmr", search_kwargs={"k": 8, "fetch_k": 40})
+    return vector_store.as_retriever(
+        search_type="mmr",
+        search_kwargs={
+            "k": 8,
+            "fetch_k": 40,
+            "lambda_mult": 0.7,  # Balance between relevance (1.0) and diversity (0.0)
+        }
+    )
 
 
 def retrieve_docs(state: GraphState, retriever) -> GraphState:
     q = state["question"]
     top_k = int(state.get("filters", {}).get("top_k", 8))
     docs: List[Document] = retriever.invoke(q)
-    state["retrieved"] = docs[:top_k]
+    
+    # Filter out low-relevance documents based on basic heuristics
+    filtered_docs = []
+    for doc in docs[:top_k]:
+        # Simple relevance check: document should have meaningful content
+        content = doc.page_content.strip()
+        if len(content) > 50 and doc.metadata.get("source_id") is not None:
+            filtered_docs.append(doc)
+    
+    state["retrieved"] = filtered_docs if filtered_docs else docs[:min(3, len(docs))]
     return state
 
 
@@ -228,6 +246,44 @@ def generate_draft_sync(state: GraphState) -> GraphState:
     resp = chain.invoke(context)
     return _parse_llm_output(resp.content, state)
 
+def verify_faithfulness(state: GraphState) -> GraphState:
+    """Optional verification step to check answer faithfulness."""
+    draft = state.get("draft", {})
+    answer_text = draft.get("answer", "")
+    citations = state.get("_citations", [])
+    
+    if not answer_text or not citations:
+        return state
+    
+    try:
+        verification_prompt = ChatPromptTemplate.from_messages([
+            ("system", verification_system()),
+            ("user", verification_user_template()),
+        ])
+        chain = verification_prompt | make_llm(json_mode=True)
+        
+        result = chain.invoke({
+            "question": state.get("question", ""),
+            "answer": answer_text,
+            "citations": json.dumps([c.get("snippet", "") for c in citations]),
+        })
+        
+        verification = json.loads(result.content)
+        
+        # Add verification metadata to state for debugging/monitoring
+        if not verification.get("is_faithful", True) or verification.get("confidence", 1.0) < 0.7:
+            if "metadata" not in state.get("draft", {}):
+                state["draft"]["metadata"] = {}
+            state["draft"]["metadata"]["faithfulness_warning"] = True
+            state["draft"]["metadata"]["unsupported_claims"] = verification.get("unsupported_claims", [])
+            state["draft"]["metadata"]["faithfulness_confidence"] = verification.get("confidence", 0.0)
+    except Exception as e:
+        # Non-blocking - if verification fails, continue without it
+        print(f"Verification step failed: {e}")
+    
+    return state
+
+
 def format_answer(state: GraphState) -> GraphState:
     data = state.get("draft", {}) or {}
     all_citations = state.get("_citations", [])
@@ -259,17 +315,25 @@ def format_answer(state: GraphState) -> GraphState:
     else:
         metrics_summary = [] # Default to an empty list
 
+    # Build metadata, including verification warnings if present
+    metadata_dict = {
+        "analysis_type": state.get("analysis_type"),
+        "count": state.get("aggregates", {}).get("count"),
+        "data_quality": "low" if (state.get("aggregates", {}).get("count", 0) < 5) else "normal",
+    }
+    
+    # Merge verification metadata if present
+    draft_metadata = data.get("metadata", {})
+    if isinstance(draft_metadata, dict):
+        metadata_dict.update(draft_metadata)
+
     answer = RAGAnswer(
         answer=data.get("answer", ""),
         bullets=data.get("bullets", []) or [],
         metrics_summary=metrics_summary,
         citations=[RAGCitation(**c) for c in final_citations if c.get("source_id") is not None],
         follow_ups=data.get("follow_ups", []) or [],
-        metadata={
-            "analysis_type": state.get("analysis_type"),
-            "count": state.get("aggregates", {}).get("count"),
-            "data_quality": "low" if (state.get("aggregates", {}).get("count", 0) < 5) else "normal",
-        },
+        metadata=metadata_dict,
     )
     state["answer"] = json.loads(answer.model_dump_json())
     return state
@@ -289,6 +353,7 @@ class RAGGraph:
         graph.add_node("retrieve", lambda s: retrieve_docs(s, self.retriever))
         graph.add_node("aggregate", compute_aggregates)
         graph.add_node("draft", generate_draft_sync)
+        graph.add_node("verify", verify_faithfulness)
         graph.add_node("format", format_answer)
         graph.add_node("save_history", save_history)
 
@@ -297,7 +362,8 @@ class RAGGraph:
         graph.add_edge("classify", "retrieve")
         graph.add_edge("retrieve", "aggregate")
         graph.add_edge("aggregate", "draft")
-        graph.add_edge("draft", "format")
+        graph.add_edge("draft", "verify")
+        graph.add_edge("verify", "format")
         graph.add_edge("format", "save_history")
 
         self.app = graph.compile()
@@ -343,7 +409,10 @@ class RAGGraph:
         state = _parse_llm_output(resp.content, state)
         state["draft"]["answer"] = full_answer # Add the streamed answer to the draft
 
-        # 4. Format and save
+        # 4. Verify faithfulness
+        state = verify_faithfulness(state)
+
+        # 5. Format and save
         state = format_answer(state)
         state = save_history(state)
 
