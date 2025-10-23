@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { Chart } from 'chart.js/auto';
 import { getTrends } from '../lib/api';
+import { useAppState } from '../contexts/AppStateContext';
 import type { ColumnMapping } from '../lib/types';
 
 export default function TrendsView() {
+  const { state, setTrendsMetric, setTrendsPeriod } = useAppState();
+  const metric = state.trendsMetric;
+  const period = state.trendsPeriod;
   const [columnMapping, setColumnMapping] = useState<ColumnMapping>({});
-  const [metric, setMetric] = useState<string>('');
-  const [period, setPeriod] = useState<'daily' | 'weekly'>('daily');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -19,12 +21,12 @@ export default function TrendsView() {
         const map: ColumnMapping = await resp.json();
         setColumnMapping(map);
         const first = Object.keys(map)[0];
-        if (first) setMetric(first);
+        if (first && !metric) setTrendsMetric(first);
       } catch (e) {
         setError('Failed to load column mapping');
       }
     })();
-  }, []);
+  }, [metric, setTrendsMetric]);
 
   useEffect(() => {
     if (!metric) return;
@@ -62,13 +64,13 @@ export default function TrendsView() {
       <h2>Speaker Trends</h2>
       <div className="chart-controls" style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
         <label>Metric:</label>
-        <select value={metric} onChange={(e) => setMetric(e.target.value)}>
+        <select value={metric} onChange={(e) => setTrendsMetric(e.target.value)}>
           {Object.keys(columnMapping).map(key => (
             <option key={key} value={key}>{getDisplayName(key, columnMapping)}</option>
           ))}
         </select>
         <label>Period:</label>
-        <select value={period} onChange={(e) => setPeriod(e.target.value as 'daily' | 'weekly')}>
+        <select value={period} onChange={(e) => setTrendsPeriod(e.target.value as 'daily' | 'weekly')}>
           <option value="daily">Daily</option>
           <option value="weekly">Weekly</option>
         </select>

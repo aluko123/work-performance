@@ -41,8 +41,8 @@ export async function getAnalyses(page = 1, limit = 20): Promise<AnalysesRespons
   return resp.json();
 }
 
-export async function getAnalysis(id: number): Promise<Analysis> {
-  const resp = await fetch(withBase(`/analyses/${id}`));
+export async function getAnalysis(id: number, opts?: { signal?: AbortSignal }): Promise<Analysis> {
+  const resp = await fetch(withBase(`/analyses/${id}`), { signal: opts?.signal });
   if (!resp.ok) throw new Error('Failed to fetch analysis');
   return resp.json();
 }

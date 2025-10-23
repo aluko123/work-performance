@@ -1,6 +1,6 @@
-import { useState, type ChangeEvent, type FormEvent, useCallback } from "react";
+import { useState, type ChangeEvent, type FormEvent, useCallback, useEffect } from "react";
 import type { Analysis } from "../lib/types";
-import { startAnalysis, getAnalysisStatus, getAnalysis } from "../lib/api";
+import { useUpload } from "../contexts/UploadContext";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { Progress } from "./ui/progress";
@@ -15,10 +15,13 @@ export interface FileUploadProps {
 }
 
 export function FileUpload({ setIsLoading, setError, setAnalysis, onCompleted }: FileUploadProps) {
+    const { startUpload, getJob, getActiveJobs } = useUpload();
     const [file, setFile] = useState<File | null>(null);
     const [dragActive, setDragActive] = useState(false);
-    const [progress, setProgress] = useState(0);
-    const [status, setStatus] = useState<'idle' | 'uploading' | 'processing' | 'completed'>('idle');
+    const [currentJobId, setCurrentJobId] = useState<string | null>(null);
+    
+    const activeJobs = getActiveJobs();
+    const currentJob = currentJobId ? getJob(currentJobId) : undefined;
 
     const handleDrag = useCallback((e: React.DragEvent) => {
         e.preventDefault();
@@ -45,6 +48,29 @@ export function FileUpload({ setIsLoading, setError, setAnalysis, onCompleted }:
         }
     };
 
+    useEffect(() => {
+        if (!currentJob) {
+            setIsLoading(false);
+            return;
+        }
+
+        setIsLoading(currentJob.status === 'processing' || currentJob.status === 'uploading');
+
+        if (currentJob.status === 'completed' && currentJob.analysis) {
+            setAnalysis(currentJob.analysis);
+            onCompleted?.(currentJob.analysis);
+            setTimeout(() => {
+                setFile(null);
+                setCurrentJobId(null);
+            }, 2000);
+        }
+
+        if (currentJob.status === 'failed') {
+            setError(currentJob.error || 'Upload failed');
+            setIsLoading(false);
+        }
+    }, [currentJob, setIsLoading, setError, setAnalysis, onCompleted]);
+
     const handleSubmit = async (e: FormEvent) => {
         e.preventDefault();
         if(!file) {
@@ -55,53 +81,12 @@ export function FileUpload({ setIsLoading, setError, setAnalysis, onCompleted }:
         setIsLoading(true);
         setError(null);
         setAnalysis(null);
-        setStatus('uploading');
-        setProgress(10);
 
         try {
-            // 1) Start async job
-            const task = await startAnalysis(file);
-            setProgress(30);
-            setStatus('processing');
-
-            // 2) Poll for completion
-            let attempts = 0;
-            let analysisId: number | undefined;
-            while (attempts < 120) { // up to ~10 minutes at 5s interval
-                const status = await getAnalysisStatus(task.job_id);
-                if (status.status === 'COMPLETED' && status.analysis_id) {
-                    analysisId = status.analysis_id;
-                    setProgress(80);
-                    break;
-                }
-                if (status.status === 'FAILED') {
-                    throw new Error(status.error || 'Analysis failed');
-                }
-                setProgress(30 + (attempts / 120) * 50);
-                await new Promise(res => setTimeout(res, 5000));
-                attempts += 1;
-            }
-            if (!analysisId) throw new Error('Timed out waiting for analysis');
-
-            setProgress(90);
-            // 3) Fetch the created analysis
-            const analysis = await getAnalysis(analysisId);
-            setProgress(100);
-            setStatus('completed');
-            setAnalysis(analysis);
-            onCompleted?.(analysis);
-
-            // Reset after success
-            setTimeout(() => {
-                setFile(null);
-                setStatus('idle');
-                setProgress(0);
-            }, 2000);
+            const jobId = await startUpload(file);
+            setCurrentJobId(jobId);
         } catch (err: any) {
-            setError(err.message || 'Analysis failed');
-            setStatus('idle');
-            setProgress(0);
-        } finally {
+            setError(err.message || 'Upload failed');
             setIsLoading(false);
         }
     };
@@ -137,7 +122,7 @@ export function FileUpload({ setIsLoading, setError, setAnalysis, onCompleted }:
                                 <p className="text-xs text-muted-foreground">
                                     {(file.size / 1024 / 1024).toFixed(2)} MB
                                 </p>
-                                {status === 'completed' && (
+                                {currentJob?.status === 'completed' && (
                                     <div className="flex items-center justify-center gap-1 text-green-600">
                                         <CheckCircle className="h-4 w-4" />
                                         <span className="text-sm">Analysis complete!</span>
@@ -166,26 +151,35 @@ export function FileUpload({ setIsLoading, setError, setAnalysis, onCompleted }:
                         )}
                     </div>
 
-                    {(status === 'uploading' || status === 'processing') && (
+                    {currentJob && (currentJob.status === 'uploading' || currentJob.status === 'processing') && (
                         <div className="space-y-2">
-                            <Progress value={progress} className="w-full" />
+                            <Progress value={currentJob.progress} className="w-full" />
                             <p className="text-xs text-center text-muted-foreground">
-                                {status === 'uploading' ? 'Uploading...' : 'Processing...'} {Math.round(progress)}%
+                                {currentJob.status === 'uploading' ? 'Uploading...' : 'Processing...'} {Math.round(currentJob.progress)}%
                             </p>
+                            <p className="text-xs text-center text-muted-foreground italic">
+                                {currentJob.fileName}
+                            </p>
+                        </div>
+                    )}
+                    
+                    {activeJobs.length > 1 && (
+                        <div className="text-xs text-muted-foreground text-center">
+                            {activeJobs.length} uploads in progress
                         </div>
                     )}
 
                     <Button
                         type="submit"
-                        disabled={!file || status !== 'idle'}
+                        disabled={!file || (currentJob !== null && ['uploading', 'processing'].includes(currentJob?.status || ''))}
                         className="w-full"
                     >
-                        {status === 'completed' ? (
+                        {currentJob?.status === 'completed' ? (
                             <>
                                 <CheckCircle className="mr-2 h-4 w-4" />
                                 Analysis Complete
                             </>
-                        ) : status === 'processing' ? (
+                        ) : currentJob?.status === 'processing' ? (
                             "Processing..."
                         ) : (
                             "Analyze File"

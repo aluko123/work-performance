@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useDeferredValue } from 'react';
 import {
   useReactTable,
   getCoreRowModel,
@@ -36,6 +36,7 @@ export function AnalysisDisplay({ analysis, columnMapping }: AnalysisDisplayProp
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [globalFilter, setGlobalFilter] = useState('');
+  const deferredGlobalFilter = useDeferredValue(globalFilter);
 
   if (!analysis.utterances || analysis.utterances.length === 0) {
     return (
@@ -45,13 +46,19 @@ export function AnalysisDisplay({ analysis, columnMapping }: AnalysisDisplayProp
     );
   }
 
-  const metricKeys = Array.from(new Set(
-    analysis.utterances.flatMap(utt => Object.keys(utt.predictions || {}))
-  )).filter(k => !(k.endsWith('.1') || k.endsWith('_1')));
+  const metricKeys = useMemo(() => 
+    Array.from(new Set(
+      analysis.utterances.flatMap(utt => Object.keys(utt.predictions || {}))
+    )).filter(k => !(k.endsWith('.1') || k.endsWith('_1'))),
+    [analysis.utterances]
+  );
 
-  const aggregatedScoreKeys = Array.from(new Set(
-    analysis.utterances.flatMap(utt => Object.keys(utt.aggregated_scores || {}))
-  )).filter(k => !(k.endsWith('.1') || k.endsWith('_1')));
+  const aggregatedScoreKeys = useMemo(() => 
+    Array.from(new Set(
+      analysis.utterances.flatMap(utt => Object.keys(utt.aggregated_scores || {}))
+    )).filter(k => !(k.endsWith('.1') || k.endsWith('_1'))),
+    [analysis.utterances]
+  );
 
   const data: UtteranceRow[] = useMemo(() =>
     analysis.utterances.map((utt, index) => ({
@@ -72,11 +79,13 @@ export function AnalysisDisplay({ analysis, columnMapping }: AnalysisDisplayProp
     {
       accessorKey: 'date',
       header: 'Date',
+      enableGlobalFilter: false,
       cell: ({ getValue }: any) => <span className="font-mono text-sm">{getValue() as string}</span>,
     },
     {
       accessorKey: 'timestamp',
       header: 'Time',
+      enableGlobalFilter: false,
       cell: ({ getValue }: any) => <span className="font-mono text-sm">{getValue() as string}</span>,
     },
     {
@@ -100,6 +109,7 @@ export function AnalysisDisplay({ analysis, columnMapping }: AnalysisDisplayProp
     {
       accessorKey: 'sa_labels',
       header: 'Situational Awareness',
+      enableGlobalFilter: false,
       cell: ({ getValue }: any) => {
         const labels = getValue() as string[];
         return (
@@ -116,6 +126,7 @@ export function AnalysisDisplay({ analysis, columnMapping }: AnalysisDisplayProp
     ...metricKeys.map(key => ({
       accessorKey: key,
       header: (columnMapping[key]?.original_name) || key,
+      enableGlobalFilter: false,
       cell: ({ getValue }: any) => {
         const value = getValue() as number | null;
         return value !== null ? (
@@ -130,6 +141,7 @@ export function AnalysisDisplay({ analysis, columnMapping }: AnalysisDisplayProp
     ...aggregatedScoreKeys.map(key => ({
       accessorKey: key,
       header: (columnMapping[key]?.original_name) || key,
+      enableGlobalFilter: false,
       cell: ({ getValue }: any) => {
         const value = getValue() as number | null;
         return value !== null ? (
@@ -156,7 +168,7 @@ export function AnalysisDisplay({ analysis, columnMapping }: AnalysisDisplayProp
     state: {
       sorting,
       columnFilters,
-      globalFilter,
+      globalFilter: deferredGlobalFilter,
     },
     initialState: {
       pagination: {
