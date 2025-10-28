@@ -5,14 +5,37 @@ import { Card } from './ui/card';
 import { Badge } from './ui/badge';
 import { Send, Bot, User, Loader2 } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { ChartRenderer } from './ChartRenderer';
 
 // Define the structure of a message in the chat history
+interface ChartDataset {
+    name: string;
+    data: number[];
+}
+
+interface ChartConfig {
+    xAxisLabel: string;
+    yAxisLabel: string;
+    title: string;
+    colors?: string[];
+}
+
+interface Chart {
+    type: 'line' | 'bar' | 'grouped_bar';
+    data: {
+        labels: string[];
+        datasets: ChartDataset[];
+    };
+    config: ChartConfig;
+}
+
 interface Message {
     sender: 'user' | 'ai';
     text: string;
     followUps?: string[];
     bullets?: string[];
     citations?: Array<{ speaker?: string; date?: string; timestamp?: string; snippet?: string }>;
+    charts?: Chart[];
 }
 
 interface RAGQueryProps {
@@ -120,13 +143,14 @@ export function RAGQuery({ sessionId: propSessionId }: RAGQueryProps = {}) {
                                     return newHistory;
                                 });
                             }
-                            if (data.bullets || data.citations) {
+                            if (data.bullets || data.citations || data.charts) {
                                 setHistory(prev => {
                                     const newHistory = [...prev];
                                     const lastMessage = newHistory[newHistory.length - 1];
                                     if (lastMessage && lastMessage.sender === 'ai') {
                                         if (data.bullets) lastMessage.bullets = data.bullets;
                                         if (data.citations) lastMessage.citations = data.citations;
+                                        if (data.charts) lastMessage.charts = data.charts;
                                     }
                                     return newHistory;
                                 });
@@ -208,6 +232,14 @@ export function RAGQuery({ sessionId: propSessionId }: RAGQueryProps = {}) {
                                         </li>
                                     ))}
                                 </ul>
+                            )}
+
+                            {msg.sender === 'ai' && Array.isArray(msg.charts) && msg.charts.length > 0 && (
+                                <div className="mt-4 space-y-4">
+                                    {msg.charts.map((chart, i) => (
+                                        <ChartRenderer key={i} chart={chart} />
+                                    ))}
+                                </div>
                             )}
 
                             {msg.sender === 'ai' && Array.isArray(msg.citations) && msg.citations.length > 0 && (
