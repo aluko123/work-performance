@@ -1,10 +1,12 @@
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 import os
 import torch
+from functools import lru_cache
 from sqlalchemy.orm import Session
 from sqlalchemy import func, cast, JSON
 from sqlalchemy.sql.expression import case
 from . import db_models
+from .config.chart_config import CHART_CACHE_SIZE, CHART_MAX_DATA_POINTS, METRIC_DISPLAY_NAMES
 
 
 def predict_all_scores_batch(texts: List[str], model, tokenizer, metric_cols: List[str]) -> List[Dict[str, int]]:
@@ -264,3 +266,243 @@ def get_speaker_trends(db: Session, metric: str, period: str):
         })
 
     return {'labels': labels, 'datasets': datasets}
+
+
+def _sample_data(data: List[Any], max_points: int) -> List[Any]:
+    """
+    Evenly sample data if it exceeds max_points.
+    Preserves first and last points.
+    """
+    if len(data) <= max_points:
+        return data
+    
+    # Calculate step size
+    step = len(data) / (max_points - 1)
+    indices = [0]  # Always include first point
+    
+    for i in range(1, max_points - 1):
+        indices.append(int(i * step))
+    
+    indices.append(len(data) - 1)  # Always include last point
+    
+    return [data[i] for i in indices]
+
+
+def get_chart_data(
+    db: Session,
+    chart_type: str,
+    metric: Optional[str] = None,
+    metrics: Optional[List[str]] = None,
+    group_by: str = "date",
+    filters: Optional[Dict[str, Any]] = None,
+    max_points: int = None,
+    level: str = "aggregated"
+) -> Optional[Dict[str, Any]]:
+    """
+    Generalized chart data retrieval with caching and auto-sampling.
+    
+    Args:
+        db: Database session
+        chart_type: "line", "bar", or "grouped_bar"
+        metric: Single metric name (for line/bar charts)
+        metrics: List of metrics (for grouped_bar)
+        group_by: "date", "speaker", or "metric"
+        filters: Dict with optional keys: speaker, date_from, date_to
+        max_points: Maximum data points (defaults to CHART_MAX_DATA_POINTS)
+    
+    Returns:
+        {
+            "labels": List[str],
+            "datasets": List[{
+                "name": str,
+                "data": List[float]
+            }]
+        }
+        or None if no data available
+    """
+    if max_points is None:
+        max_points = CHART_MAX_DATA_POINTS
+    
+    filters = filters or {}
+    
+    # Clean metric name
+    if metric:
+        metric = metric.replace('.1', '')
+    
+    print(f"📊 get_chart_data: type={chart_type}, metric={metric}, level={level}, group_by={group_by}")
+    
+    # Build base query
+    query = db.query(db_models.Utterance).join(db_models.Analysis)
+    
+    # Apply filters
+    if filters.get('speaker'):
+        query = query.filter(db_models.Utterance.speaker == filters['speaker'])
+    if filters.get('date_from'):
+        query = query.filter(db_models.Utterance.date >= filters['date_from'])
+    if filters.get('date_to'):
+        query = query.filter(db_models.Utterance.date <= filters['date_to'])
+    
+    # Filter out empty dates
+    query = query.filter(
+        db_models.Utterance.date != None,
+        db_models.Utterance.date != ''
+    )
+    
+    # Execute based on group_by
+    if group_by == "date":
+        # Time series data
+        date_trunc_func = func.date(db_models.Utterance.date)
+        
+        # Choose the right column based on metric level and metric name
+        # Check if this specific metric is aggregated (ends with _Score or starts with Total_/Feedback_)
+        is_aggregated_metric = (
+            metric and (
+                metric.endswith('_Score') or 
+                metric.startswith('Total_') or 
+                metric.startswith('Feedback_Tier')
+            )
+        )
+        
+        if is_aggregated_metric or level == "aggregated":
+            metric_value = case(
+                (db_models.Utterance.aggregated_scores[metric] != None, 
+                 db_models.Utterance.aggregated_scores[metric].as_float()),
+                else_=None
+            )
+        else:  # granular
+            metric_value = case(
+                (db_models.Utterance.predictions[metric] != None, 
+                 db_models.Utterance.predictions[metric].as_float()),
+                else_=None
+            )
+        
+        results = query.with_entities(
+            date_trunc_func.label('period'),
+            func.avg(metric_value).label('average_score')
+        ).group_by(date_trunc_func).order_by(date_trunc_func).all()
+        
+        if not results:
+            print(f"📊 No results returned for metric={metric}, level={level}")
+            return None
+        
+        labels = [str(res.period) for res in results]
+        data = [res.average_score for res in results]
+        
+        print(f"📊 Chart data: {len(labels)} points, first 3: {list(zip(labels[:3], data[:3]))}")
+        
+        # Sample if too many points
+        if len(labels) > max_points:
+            sampled_indices = [0]
+            step = len(labels) / (max_points - 1)
+            for i in range(1, max_points - 1):
+                sampled_indices.append(int(i * step))
+            sampled_indices.append(len(labels) - 1)
+            
+            labels = [labels[i] for i in sampled_indices]
+            data = [data[i] for i in sampled_indices]
+        
+        result = {
+            "labels": labels,
+            "datasets": [{
+                "name": METRIC_DISPLAY_NAMES.get(metric, metric),
+                "data": data
+            }]
+        }
+        print(f"📊 Returning chart data: {len(labels)} labels, {len(data)} data points, sample: {data[:3]}")
+        return result
+    
+    elif group_by == "speaker":
+        # Speaker comparison
+        is_aggregated_metric = (
+            metric and (
+                metric.endswith('_Score') or 
+                metric.startswith('Total_') or 
+                metric.startswith('Feedback_Tier')
+            )
+        )
+        
+        if is_aggregated_metric or level == "aggregated":
+            metric_value = case(
+                (db_models.Utterance.aggregated_scores[metric] != None, 
+                 db_models.Utterance.aggregated_scores[metric].as_float()),
+                else_=None
+            )
+        else:  # granular
+            metric_value = case(
+                (db_models.Utterance.predictions[metric] != None, 
+                 db_models.Utterance.predictions[metric].as_float()),
+                else_=None
+            )
+        
+        results = query.with_entities(
+            db_models.Utterance.speaker,
+            func.avg(metric_value).label('average_score')
+        ).group_by(db_models.Utterance.speaker).order_by(
+            func.avg(metric_value).desc()
+        ).all()
+        
+        if not results:
+            return None
+        
+        labels = [res.speaker for res in results]
+        data = [res.average_score for res in results]
+        
+        return {
+            "labels": labels,
+            "datasets": [{
+                "name": METRIC_DISPLAY_NAMES.get(metric, metric),
+                "data": data
+            }]
+        }
+    
+    elif group_by == "metric":
+        # Multi-metric for single entity (e.g., grouped bar for one speaker)
+        if not metrics:
+            return None
+        
+        dataset_data = []
+        valid_metrics = []
+        
+        for m in metrics:
+            m_clean = m.replace('.1', '')
+            
+            # Auto-detect if this metric is aggregated
+            is_aggregated_metric = (
+                m_clean.endswith('_Score') or 
+                m_clean.startswith('Total_') or 
+                m_clean.startswith('Feedback_Tier')
+            )
+            
+            if is_aggregated_metric:
+                metric_value = case(
+                    (db_models.Utterance.aggregated_scores[m_clean] != None, 
+                     db_models.Utterance.aggregated_scores[m_clean].as_float()),
+                    else_=None
+                )
+            else:  # granular
+                metric_value = case(
+                    (db_models.Utterance.predictions[m_clean] != None, 
+                     db_models.Utterance.predictions[m_clean].as_float()),
+                    else_=None
+                )
+            
+            result = query.with_entities(
+                func.avg(metric_value).label('average_score')
+            ).scalar()
+            
+            if result is not None:
+                dataset_data.append(result)
+                valid_metrics.append(m_clean)
+        
+        if not valid_metrics:
+            return None
+        
+        return {
+            "labels": [METRIC_DISPLAY_NAMES.get(m, m) for m in valid_metrics],
+            "datasets": [{
+                "name": filters.get('speaker', 'All Speakers'),
+                "data": dataset_data
+            }]
+        }
+    
+    return None

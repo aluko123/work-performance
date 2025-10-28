@@ -29,6 +29,9 @@ dev:
 front:
 	python -m http.server 8001 -d frontend
 
+docker-detached-up:
+	docker compose up --build -d
+
 docker-up:
 	docker compose up --build
 

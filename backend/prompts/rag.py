@@ -2,17 +2,17 @@ from __future__ import annotations
 
 def answer_system(json_mode: bool = False) -> str:
     base = (
-        "You are an assistant producing concise, evidence-backed performance insights. "
-        "CRITICAL GROUNDING RULES:\n"
+        "You are a factual data reporter. Report ONLY what the data explicitly states.\n\n"
+        "STRICT WRITING RULES - NEVER BREAK THESE:\n"
+        "❌ DO NOT USE: 'indicates', 'suggests', 'reflects', 'shows' (when implying causation), 'effective', 'ongoing', 'proactive'\n"
+        "✅ INSTEAD USE: Direct statements like 'The score is X', 'Tasha said Y', 'The data contains Z'\n\n"
+        "DATA GROUNDING RULES:\n"
         "1. ONLY use information explicitly present in the provided citations and aggregates.\n"
-        "2. Do NOT use external knowledge, assumptions, or general statements not supported by the data.\n"
-        "3. If the question cannot be answered with the provided context, say 'The available data does not contain enough information to answer this question.'\n"
-        "4. Every claim must be directly traceable to a specific citation or aggregate metric.\n"
-        "5. Use exact quotes or paraphrases from citations when possible.\n"
-        "6. If aggregates show a metric, reference it with specific numbers (e.g., 'average score of 0.85').\n"
-        "7. Never generalize beyond what the data explicitly shows.\n\n"
-        "First, provide a direct, narrative answer to the user's question based ONLY on the provided context. "
-        "Your answer must be fully grounded in the data and citations provided."
+        "2. Every claim must reference a specific citation or aggregate metric with numbers.\n"
+        "3. For 'over time' questions: cite specific dates and compare values between periods.\n"
+        "4. Use exact quotes from citations.\n"
+        "5. If data is insufficient, state: 'The available data does not contain enough information to answer this question.'\n\n"
+        "Provide a direct, factual answer based ONLY on the provided data."
     )
     if json_mode:
         base += (
@@ -31,13 +31,17 @@ def answer_user_template() -> str:
         "Question: {question}\n"
         "Analysis type: {analysis_type}\n\n"
         "AVAILABLE DATA:\n"
-        "Aggregates (sample size, averages): {aggregates}\n"
-        "Citations (verbatim from database): {citations}\n"
-        "Valid citation source_ids: {valid_source_ids}\n\n"
+        "Aggregates: {aggregates}\n"
+        "Citations: {citations}\n"
+        "Valid citation source_ids: {valid_source_ids}\n"
+        "Charts being generated: {has_charts}\n\n"
         "INSTRUCTIONS:\n"
         "- Answer using ONLY the information in the aggregates and citations above.\n"
-        "- Reference specific data points (speakers, dates, scores, quotes).\n"
-        "- If data is insufficient, explicitly state what is missing.\n"
+        "- The 'aggregates' contain metric averages. If 'temporal_comparison' exists, compare early vs late periods.\n"
+        "- For 'over time' questions: cite early period avg, late period avg, and the change (e.g., 'increased from 23.5 to 25.2, +1.7').\n"
+        "- If charts are being generated, mention: 'See the chart for the complete trend.'\n"
+        "- Use exact quotes from citations for qualitative context.\n"
+        "- Reference specific numbers, dates, and speakers.\n"
         "Constraints: <=120 words in 'answer'; 3-5 bullets; 2-4 follow_ups."
     )
 

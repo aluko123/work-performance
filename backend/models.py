@@ -100,11 +100,30 @@ class RAGCitation(BaseModel):
     snippet: Optional[str] = None
 
 
+class ChartDataset(BaseModel):
+    name: str
+    data: List[float]
+
+
+class ChartConfig(BaseModel):
+    xAxisLabel: str
+    yAxisLabel: str
+    title: str
+    colors: Optional[List[str]] = None
+
+
+class Chart(BaseModel):
+    type: str  # "line", "bar", "grouped_bar"
+    data: Dict[str, Any]  # {"labels": [...], "datasets": [...]}
+    config: ChartConfig
+
+
 class RAGAnswer(BaseModel):
     answer: str
     bullets: List[str] = []
     metrics_summary: List[Dict[str, Any]] = []
     citations: List[RAGCitation] = []
     follow_ups: List[str] = []
+    charts: List[Chart] = []  # NEW: Chart data
     metadata: Dict[str, Any] = {}
 
