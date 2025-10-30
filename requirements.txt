@@ -19,6 +19,7 @@ chromadb
 langgraph
 redis
 pytest
+pytest-asyncio
 pytest-cov
 requests
 arq

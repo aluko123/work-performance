@@ -245,10 +245,10 @@ class TestAgentIntegration:
     """Integration tests for full agent workflows"""
     
     @pytest.mark.asyncio
-    @patch('backend.agent.client')
+    @patch('backend.agent.client.chat.completions.create')
     @patch('backend.agent.redis.from_url')
     @patch('backend.agent.get_corpus_metadata')
-    async def test_simple_query_with_tool(self, mock_meta, mock_redis, mock_client):
+    async def test_simple_query_with_tool(self, mock_meta, mock_redis, mock_create):
         """Test agent handles simple query with one tool call"""
         # Setup mocks
         mock_meta.return_value = {
@@ -278,7 +278,7 @@ class TestAgentIntegration:
             for token in ["Safety", " is", " good"]:
                 yield MagicMock(choices=[MagicMock(delta=MagicMock(content=token, tool_calls=None))])
         
-        mock_client.chat.completions.create.side_effect = [
+        mock_create.side_effect = [
             mock_stream_1(),
             mock_stream_2()
         ]

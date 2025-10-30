@@ -112,7 +112,7 @@ async def run_agent(
         
         # Call OpenAI with tools
         try:
-            response = await client.chat.completions.create(
+            response = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=clean_messages,
                 tools=TOOL_DEFINITIONS,
