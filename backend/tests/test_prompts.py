@@ -77,19 +77,24 @@ def test_chunk_system_contains_required_keys():
 
 def test_answer_system_modes():
     base = answer_system(json_mode=False)
-    assert "evidence-backed performance insights" in base
+    assert "performance insights advisor" in base  # Updated from "evidence-backed"
     assert "JSON object" not in base  # only in json_mode
+    assert "PERSONALITY & TONE" in base  # New conversational style
 
     json_mode = answer_system(json_mode=True)
     for k in ["bullets", "metrics_summary", "follow_ups", "source_ids"]:
         assert k in json_mode
-    assert "single JSON object" in json_mode
+    assert "JSON object" in json_mode  # Changed from "single JSON object"
 
 
 def test_answer_user_template_placeholders():
     tmpl = answer_user_template()
-    for ph in ["{question}", "{analysis_type}", "{aggregates}", "{citations}", "{valid_source_ids}"]:
+    # Updated to include new conversation_history placeholder
+    for ph in ["{conversation_history}", "{question}", "{analysis_type}", "{aggregates}", "{citations}", "{valid_source_ids}"]:
         assert ph in tmpl
+    # Check for new sections
+    assert "CONTEXT AWARENESS" in tmpl
+    assert "TEMPORAL ANALYSIS" in tmpl
 
 
 def test_metadata_system_and_template():

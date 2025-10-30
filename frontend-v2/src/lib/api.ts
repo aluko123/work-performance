@@ -57,7 +57,7 @@ export async function getTrends(metric: string, period: string): Promise<TrendsR
 }
 
 export function streamInsights(body: { question: string; session_id: string }) {
-  return fetch(withBase('/api/get_insights'), {
+  return fetch(withBase('/api/chat'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
