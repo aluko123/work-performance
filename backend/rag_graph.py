@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any, Dict, List, Optional, TypedDict, AsyncGenerator
 
 import redis
@@ -12,6 +13,8 @@ from langchain_community.vectorstores import Chroma
 from langgraph.graph import StateGraph
 from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_core.prompts import ChatPromptTemplate
+from openai import OpenAI
+import numpy as np
 
 from . import db_models
 from .database import SessionLocal
@@ -69,6 +72,45 @@ def _redis_client() -> Optional[redis.Redis]:
         return None
 
 
+def _normalize_history_to_turns(history: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """
+    Normalize history to per-turn format: [{"user": "...", "assistant": "..."}, ...]
+    Handles both old role/content format and new user/assistant format.
+    """
+    if not history:
+        return []
+    
+    # If already in turn format (has "user" or "assistant" keys)
+    if history and ("user" in history[0] or "assistant" in history[0]):
+        return history
+    
+    # Convert role/content pairs to turns
+    turns = []
+    current = {}
+    
+    for msg in history:
+        role = msg.get("role")
+        content = msg.get("content", "")
+        
+        if role == "user":
+            if current:  # Save previous turn
+                turns.append(current)
+            current = {"user": content, "assistant": ""}
+        elif role == "assistant":
+            if "user" in current:
+                current["assistant"] = content
+                turns.append(current)
+                current = {}
+            else:
+                # Orphan assistant message, create turn
+                turns.append({"user": "", "assistant": content})
+    
+    if current:  # Save last incomplete turn
+        turns.append(current)
+    
+    return turns
+
+
 def load_history(state: GraphState) -> GraphState:
     sid = state.get("session_id")
     if not sid:
@@ -88,7 +130,9 @@ def load_history(state: GraphState) -> GraphState:
             history = json.loads(raw)
         except Exception:
             history = []
-    state["history"] = history[-10:]
+    
+    # Normalize to turn format and keep last 10 turns
+    state["history"] = _normalize_history_to_turns(history)[-10:]
     return state
 
 
@@ -97,23 +141,125 @@ def save_history(state: GraphState) -> GraphState:
     if not sid:
         return state
     r = _redis_client()
-    history: List[Dict[str, str]] = state.get("history", [])
-    draft = state.get("answer") or {}
+    
+    # Normalize history to turn format
+    history: List[Dict[str, str]] = _normalize_history_to_turns(state.get("history", []))
+    
+    # Get question and answer
     q = state.get("question")
-    a = draft.get("answer") if isinstance(draft, dict) else None
+    # Prefer final answer, fall back to draft
+    msg = state.get("answer") or state.get("draft") or {}
+    a = msg.get("answer") if isinstance(msg, dict) else None
+    
+    # Append current turn
     if q and a:
-        history = (history + [{"role": "user", "content": q}, {"role": "assistant", "content": a}])[-10:]
+        history = (history + [{"user": q, "assistant": a}])[-10:]
+    
+    # Save to Redis
     if r:
         try:
             r.set(f"rag:hist:{sid}", json.dumps(history))
         except Exception:
             pass
+    
     state["history"] = history
     return state
 
 
+def resolve_contextual_query(question: str, history: List[dict]) -> str:
+    """
+    Expand abbreviated queries using conversation context.
+    Carries over speaker, metric, and intent from previous turn.
+    
+    Examples:
+    - "What about Mike?" → "What about Mike's safety performance?"
+    - "what about communication?" (after "Tasha's safety?") → "what about Tasha's communication?"
+    - "and delivery?" (after trends query) → "and delivery trends?"
+    """
+    if not history:
+        return question
+    
+    # Patterns indicating context dependency
+    contextual_patterns = [
+        r"^what about (.+?)\??$",
+        r"^how about (.+?)\??$",
+        r"^and (.+?)\??$",
+        r"^show me (.+?)$",
+        r"^(.+?) too\??$",
+        r"^same for (.+?)\??$"
+    ]
+    
+    question_lower = question.lower().strip()
+    is_contextual = any(re.match(p, question_lower) for p in contextual_patterns)
+    
+    if not is_contextual:
+        return question
+    
+    # Get last turn context
+    last_turn = history[-1]
+    last_question = last_turn.get("user", "")
+    last_answer = last_turn.get("assistant", "")
+    last_text = last_question + " " + last_answer
+    
+    # Extract what was discussed previously
+    last_metrics = extract_metrics_from_text(last_text)
+    last_speakers = extract_speakers_from_text(last_text)
+    
+    # Extract what's in current question
+    current_metrics = extract_metrics_from_text(question)
+    current_speakers = extract_speakers_from_text(question)
+    
+    # Start building expanded question
+    expanded = question.rstrip(" ?").strip()
+    
+    # Carry over speaker if missing
+    if not current_speakers and last_speakers:
+        # "what about communication?" → "what about Tasha's communication?"
+        expanded = expanded.replace("about", f"about {last_speakers[0]}'s", 1)
+    
+    # Carry over metric if missing
+    if not current_metrics and last_metrics:
+        metric_display = METRIC_DISPLAY_NAMES.get(last_metrics[0], last_metrics[0])
+        if not current_speakers:
+            # "What about Mike?" → "What about Mike safety performance?"
+            expanded += f" {metric_display}"
+        # else speaker was added above, metric goes after speaker
+    
+    # Carry over "trend" intent if previous query was temporal
+    trend_words = ["trend", "trending", "over time", "increase", "decrease", "improve", "change"]
+    last_is_temporal = any(w in last_text.lower() for w in trend_words)
+    current_is_temporal = any(w in question_lower for w in trend_words)
+    
+    if last_is_temporal and not current_is_temporal:
+        expanded += " trends"
+    
+    # Ensure proper punctuation
+    if not expanded.endswith("?"):
+        expanded += "?"
+    
+    print(f"🧠 Contextual expansion: '{question}' → '{expanded}'")
+    return expanded
+
+
 def classify_query(state: GraphState) -> GraphState:
-    q = state["question"].lower()
+    original_question = state["question"]
+    history = state.get("history", [])
+    
+    # Expand contextual queries FIRST
+    expanded_question = resolve_contextual_query(original_question, history)
+    
+    # Store both for transparency
+    state["original_question"] = original_question
+    state["expanded_question"] = expanded_question
+    
+    # CRITICAL: Replace question with expanded version for entire pipeline
+    state["question"] = expanded_question
+    
+    print(f"🧠 Query expansion: '{original_question}' → '{expanded_question}'")
+    
+    # Use expanded question for classification
+    q = expanded_question.lower()
+    
     if any(w in q for w in ["trend", "trending", "over time", "increase", "decrease"]):
         state["analysis_type"] = "performance_trend"
     elif any(w in q for w in ["compare", "versus", "vs", "benchmark"]):
@@ -642,6 +788,73 @@ def make_llm(json_mode: bool = False) -> ChatOpenAI:
     )
 
 
+def filter_relevant_metrics(
+    question: str, 
+    averages: Dict[str, float], 
+    top_k: int = 10
+) -> Dict[str, float]:
+    """
+    Use embedding similarity to keep only relevant metrics.
+    Reduces prompt bloat from 50+ metrics to ~10.
+    
+    Args:
+        question: The user's question
+        averages: Dict of all metric averages
+        top_k: Number of top metrics to keep
+    
+    Returns:
+        Filtered dict with only top-k relevant metrics
+    """
+    if not averages or len(averages) <= top_k:
+        return averages
+    
+    try:
+        client = OpenAI()
+        
+        # Embed question
+        q_response = client.embeddings.create(
+            model="text-embedding-3-small",
+            input=question
+        )
+        q_emb = np.array(q_response.data[0].embedding)
+        
+        # Embed metric names + descriptions
+        metric_texts = []
+        metric_keys = list(averages.keys())
+        
+        for key in metric_keys:
+            # Use display name + description if available
+            display = METRIC_DISPLAY_NAMES.get(key, key)
+            desc = METRIC_DESCRIPTIONS.get(key, "")
+            metric_texts.append(f"{display}: {desc}")
+        
+        m_response = client.embeddings.create(
+            model="text-embedding-3-small",
+            input=metric_texts
+        )
+        
+        # Compute cosine similarity
+        scores = []
+        for i, key in enumerate(metric_keys):
+            m_emb = np.array(m_response.data[i].embedding)
+            # Cosine similarity
+            similarity = np.dot(q_emb, m_emb) / (np.linalg.norm(q_emb) * np.linalg.norm(m_emb))
+            scores.append((key, float(similarity)))
+        
+        # Keep top-k most relevant
+        top_metrics = sorted(scores, key=lambda x: x[1], reverse=True)[:top_k]
+        filtered = {k: averages[k] for k, _ in top_metrics}
+        
+        print(f"📊 Filtered metrics: {len(averages)} → {len(filtered)}")
+        print(f"   Top 3 relevant: {[k for k, _ in top_metrics[:3]]}")
+        
+        return filtered
+        
+    except Exception as e:
+        print(f"⚠️ Metric filtering failed: {e}, using all metrics")
+        return averages
+
+
 def _prepare_context(state: GraphState) -> Dict[str, Any]:
     # Deduplicate citations by source_id
     seen_ids = set()
@@ -660,11 +873,48 @@ def _prepare_context(state: GraphState) -> Dict[str, Any]:
                 "snippet": d.page_content[:200],
             })
     
-    agg_json = json.dumps(state.get("aggregates", {}))
+    # Format conversation history for LLM context
+    history = state.get("history", [])
+    conversation_context = ""
+    
+    if history:
+        recent_turns = history[-5:]  # Last 5 turns
+        conversation_context = "CONVERSATION HISTORY:\n"
+        for i, turn in enumerate(recent_turns, 1):
+            user_q = turn.get("user", "")
+            assistant_a = turn.get("assistant", "")
+            conversation_context += f"Turn {i}:\n"
+            conversation_context += f"  User: {user_q}\n"
+            # Truncate assistant response to 150 chars for context
+            assistant_preview = assistant_a[:150] + "..." if len(assistant_a) > 150 else assistant_a
+            conversation_context += f"  Assistant: {assistant_preview}\n\n"
+        
+        print(f"💬 Including {len(recent_turns)} conversation turns in context")
+    
+    # Filter metrics to reduce context bloat
+    aggregates_raw = state.get("aggregates", {})
+    averages = aggregates_raw.get("averages", {})
+    
+    # Filter to relevant metrics using embedding similarity
+    filtered_averages = filter_relevant_metrics(
+        state['question'], 
+        averages,
+        top_k=10
+    )
+    
+    # Rebuild aggregates with filtered averages
+    aggregates_filtered = {
+        "count": aggregates_raw.get("count"),
+        "averages": filtered_averages,
+        "temporal_comparison": aggregates_raw.get("temporal_comparison")
+    }
+    
+    agg_json = json.dumps(aggregates_filtered)
     print(f"🔍 Aggregates JSON (first 500 chars): {agg_json[:500]}")
     
     return {
         "question": state['question'],
+        "conversation_history": conversation_context,  # NEW: conversation memory
         "analysis_type": state.get("analysis_type", "facts"),
         "aggregates": agg_json,
         "citations": json.dumps(citations),
@@ -708,6 +958,133 @@ def generate_draft_sync(state: GraphState) -> GraphState:
     chain = _get_answer_chain(json_mode=True)
     resp = chain.invoke(context)
     return _parse_llm_output(resp.content, state)
+
+def extract_metrics_from_text(text: str) -> List[str]:
+    """Extract metric names mentioned in text"""
+    metrics = []
+    all_metrics = list(AGGREGATED_METRICS.keys()) + list(GRANULAR_METRICS.keys())
+    
+    text_lower = text.lower()
+    for metric in all_metrics:
+        display_name = METRIC_DISPLAY_NAMES.get(metric, metric)
+        # Check if metric or display name appears in text
+        if metric.lower() in text_lower or display_name.lower() in text_lower:
+            metrics.append(metric)
+    
+    return list(set(metrics))  # Deduplicate
+
+
+def extract_speakers_from_text(text: str) -> List[str]:
+    """Extract speaker names from text"""
+    speakers = []
+    text_lower = text.lower()
+    
+    # Get known speakers from database
+    session = SessionLocal()
+    try:
+        known_speakers_db = session.query(db_models.Utterance.speaker)\
+            .filter(db_models.Utterance.speaker.isnot(None))\
+            .distinct()\
+            .limit(20)\
+            .all()
+        known_speakers = [s[0] for s in known_speakers_db if s[0]]
+    finally:
+        session.close()
+    
+    for speaker in known_speakers:
+        if speaker.lower() in text_lower:
+            speakers.append(speaker)
+    
+    return list(set(speakers))  # Deduplicate
+
+
+def generate_smart_follow_ups(
+    question: str,
+    answer_text: str,
+    history: List[dict],
+    aggregates: dict
+) -> List[str]:
+    """Generate context-aware follow-up questions"""
+    
+    follow_ups = []
+    
+    # Extract what was discussed in current exchange
+    combined_text = question + " " + answer_text
+    mentioned_metrics = extract_metrics_from_text(combined_text)
+    mentioned_speakers = extract_speakers_from_text(combined_text)
+    
+    # 1. Speaker comparison follow-ups
+    if mentioned_speakers and len(mentioned_speakers) == 1:
+        # They asked about one speaker, suggest comparing to others
+        session = SessionLocal()
+        try:
+            all_speakers_db = session.query(db_models.Utterance.speaker)\
+                .filter(db_models.Utterance.speaker.isnot(None))\
+                .distinct()\
+                .limit(10)\
+                .all()
+            all_speakers = [s[0] for s in all_speakers_db if s[0]]
+        finally:
+            session.close()
+        
+        other_speakers = [s for s in all_speakers if s not in mentioned_speakers]
+        
+        if other_speakers and mentioned_metrics:
+            metric_display = METRIC_DISPLAY_NAMES.get(mentioned_metrics[0], mentioned_metrics[0])
+            follow_ups.append(f"How does {mentioned_speakers[0]} compare to {other_speakers[0]} on {metric_display}?")
+    
+    # 2. Temporal follow-ups
+    is_temporal_query = any(word in question.lower() for word in ["trend", "over time", "improved", "changed", "increased", "decreased"])
+    
+    if is_temporal_query and mentioned_metrics:
+        # They asked about trends, suggest drilling into causes
+        metric_display = METRIC_DISPLAY_NAMES.get(mentioned_metrics[0], mentioned_metrics[0])
+        follow_ups.append(f"What specific behaviors drove the change in {metric_display}?")
+    elif mentioned_metrics and not is_temporal_query:
+        # They asked about current state, suggest temporal view
+        metric_display = METRIC_DISPLAY_NAMES.get(mentioned_metrics[0], mentioned_metrics[0])
+        follow_ups.append(f"How has {metric_display} trended over time?")
+    
+    # 3. Proactive insights from data anomalies
+    temporal = aggregates.get("temporal_comparison")
+    if temporal:
+        early = temporal.get("early_period", {}).get("averages", {})
+        late = temporal.get("late_period", {}).get("averages", {})
+        
+        # Find metrics with big changes (>10%)
+        big_changes = []
+        for metric in set(early.keys()) & set(late.keys()):
+            if early[metric] > 0:  # Avoid division by zero
+                change_pct = ((late[metric] - early[metric]) / early[metric]) * 100
+                if abs(change_pct) > 10:
+                    big_changes.append((metric, change_pct))
+        
+        # Sort by magnitude
+        big_changes.sort(key=lambda x: abs(x[1]), reverse=True)
+        
+        # Suggest if not already discussed
+        for metric, pct in big_changes[:2]:
+            if metric not in mentioned_metrics:
+                direction = "improved" if pct > 0 else "declined"
+                display_name = METRIC_DISPLAY_NAMES.get(metric, metric)
+                follow_ups.append(f"I noticed {display_name} {direction} by {abs(pct):.1f}% - want to explore that?")
+                break  # Only add one proactive insight
+    
+    # 4. Conversation continuity
+    if history and mentioned_metrics:
+        last_turn = history[-1]
+        last_question = last_turn.get("user", "")
+        last_metrics = extract_metrics_from_text(last_question)
+        
+        # If they're asking about a different topic, offer to connect
+        if last_metrics and set(last_metrics) != set(mentioned_metrics):
+            metric1_display = METRIC_DISPLAY_NAMES.get(mentioned_metrics[0], mentioned_metrics[0])
+            metric2_display = METRIC_DISPLAY_NAMES.get(last_metrics[0], last_metrics[0])
+            follow_ups.append(f"Want to compare {metric1_display} with {metric2_display}?")
+    
+    # Return top 3, ensuring variety
+    return follow_ups[:3]
+
 
 def verify_faithfulness(state: GraphState) -> GraphState:
     """Optional verification step to check answer faithfulness."""
@@ -778,6 +1155,17 @@ def format_answer(state: GraphState) -> GraphState:
     else:
         metrics_summary = [] # Default to an empty list
 
+    # Generate smart, context-aware follow-ups
+    smart_follow_ups = generate_smart_follow_ups(
+        question=state["question"],
+        answer_text=data.get("answer", ""),
+        history=state.get("history", []),
+        aggregates=state.get("aggregates", {})
+    )
+    
+    # Use smart follow-ups if generated, otherwise fall back to LLM's suggestions
+    follow_ups = smart_follow_ups if smart_follow_ups else (data.get("follow_ups", []) or [])
+
     # Build metadata, including verification warnings if present
     metadata_dict = {
         "analysis_type": state.get("analysis_type"),
@@ -798,7 +1186,7 @@ def format_answer(state: GraphState) -> GraphState:
         bullets=data.get("bullets", []) or [],
         metrics_summary=metrics_summary,
         citations=[RAGCitation(**c) for c in final_citations if c.get("source_id") is not None],
-        follow_ups=data.get("follow_ups", []) or [],
+        follow_ups=follow_ups,
         charts=[Chart(**c) for c in charts],
         metadata=metadata_dict,
     )

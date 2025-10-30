@@ -258,9 +258,76 @@ def get_analysis(analysis_id: int, db: Session = Depends(get_db)):
 def get_trends(metric: str, period: str = 'daily', db: Session = Depends(get_db)):
     return get_speaker_trends(db=db, metric=metric, period=period)
 
+@app.post("/api/chat")
+async def chat_endpoint(query: RAGQuery):
+    """
+    New conversational agent endpoint using OpenAI native SDK.
+    Replaces complex LangGraph with simple tool calling.
+    """
+    from .agent import run_agent
+    
+    async def stream_generator():
+        answer_text = ""
+        tool_calls_made = 0
+        
+        async for chunk in run_agent(query.question, query.session_id or "default"):
+            chunk_type = chunk.get("type")
+            
+            if chunk_type == "token":
+                # Stream answer tokens
+                answer_text += chunk["content"]
+                yield f"data: {json.dumps({'answer_token': chunk['content']})}\n\n"
+            
+            elif chunk_type == "status":
+                # Stream progress updates
+                yield f"data: {json.dumps({'status': chunk['message']})}\n\n"
+            
+            elif chunk_type == "final":
+                tool_calls_made = chunk.get("tool_calls_made", 0)
+                answer_text = chunk["answer"]
+        
+        # After streaming complete, send structured data
+        # Extract simple bullets from answer (split by newlines/bullets if present)
+        bullets = []
+        lines = answer_text.split('\n')
+        for line in lines:
+            line = line.strip()
+            if line.startswith(('- ', '• ', '* ')) and len(line) > 5:
+                bullets.append(line.lstrip('- •* '))
+        
+        # Generate smart follow-ups based on conversation
+        follow_ups = [
+            "Tell me more about specific team members",
+            "Show me trends over a different time period",
+            "How do these metrics compare to benchmarks?"
+        ]
+        
+        # Send final structured payload
+        yield f"data: {json.dumps({'follow_ups': follow_ups})}\n\n"
+        yield f"data: {json.dumps({'bullets': bullets})}\n\n"
+        yield f"data: {json.dumps({'citations': []})}\n\n"
+        yield f"data: {json.dumps({'charts': []})}\n\n"
+        
+        # Final complete payload
+        final_data = {
+            "answer": answer_text,
+            "bullets": bullets,
+            "follow_ups": follow_ups,
+            "citations": [],
+            "charts": [],
+            "metadata": {
+                "tool_calls": tool_calls_made,
+                "analysis_type": "agent_based"
+            }
+        }
+        yield f"data: {json.dumps(final_data)}\n\n"
+    
+    return StreamingResponse(stream_generator(), media_type="text/event-stream")
+
+
 @app.post("/api/get_insights")
 async def rag_query_endpoint(query: RAGQuery, request: Request):
-    # This endpoint does not need arq, but shows how to access shared state if needed
+    """Legacy endpoint - will be deprecated after migration"""
     rag_graph: RAGGraph = request.app.state.rag_graph
     if not rag_graph:
         raise HTTPException(status_code=500, detail="RAG graph is not available.")
