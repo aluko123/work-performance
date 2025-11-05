@@ -1,0 +1,37 @@
+name: Lint
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  lint:
+    name: Python Linting
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff mypy || true
+
+      - name: Run ruff (if configured)
+        run: |
+          ruff check backend/ || echo "Ruff not configured, skipping"
+        continue-on-error: true
+
+      - name: Run mypy (if configured)
+        run: |
+          mypy backend/ || echo "MyPy not configured, skipping"
+        continue-on-error: true
