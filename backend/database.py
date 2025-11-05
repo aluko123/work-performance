@@ -4,11 +4,27 @@ from sqlalchemy.ext.declarative import declarative_base
 import os
 
 
-#path for SQLite db file
-SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/analysis.db")
+# Database URL (defaults to SQLite for local dev, Postgres for production)
+SQLALCHEMY_DATABASE_URL = os.getenv(
+    "DATABASE_URL", 
+    "sqlite:///./data/analysis.db"
+)
 
-#engine
-engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+# Conditional engine configuration
+if "sqlite" in SQLALCHEMY_DATABASE_URL:
+    # SQLite-specific configuration
+    engine = create_engine(
+        SQLALCHEMY_DATABASE_URL, 
+        connect_args={"check_same_thread": False}
+    )
+else:
+    # Postgres configuration with connection pooling
+    engine = create_engine(
+        SQLALCHEMY_DATABASE_URL,
+        pool_pre_ping=True,
+        pool_size=10,
+        max_overflow=20
+    )
 
 
 # Enable SQLite performance optimizations (WAL mode + other pragmas)

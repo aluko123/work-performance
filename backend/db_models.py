@@ -1,6 +1,7 @@
 from sqlalchemy import Column, Integer, String, DateTime, JSON, Text, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
+from pgvector.sqlalchemy import Vector
 from .database import Base
 
 class Analysis(Base):
@@ -27,7 +28,9 @@ class Utterance(Base):
     aggregated_scores = Column(JSON)
     sa_labels = Column(JSON, nullable=True)
     is_indexed = Column(Boolean, default=False, nullable=False, server_default='0')
-
+    
+    # Vector embedding for semantic search (text-embedding-3-small: 1536 dimensions)
+    embedding = Column(Vector(1536), nullable=True)
     
     analysis = relationship("Analysis", back_populates="utterances")    
 

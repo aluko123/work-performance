@@ -86,9 +86,9 @@ export default function UploadView() {
 
               <Card>
                 <CardHeader>
-                  <CardTitle>AI Assistant</CardTitle>
+                  <CardTitle>Insights & Analysis</CardTitle>
                   <CardDescription>
-                    Ask questions about the analysis or get insights
+                    Ask questions, explore trends, and discover insights from your data
                   </CardDescription>
                 </CardHeader>
                 <CardContent>

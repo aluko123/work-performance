@@ -10,13 +10,9 @@ openai
 openpyxl
 unstructured[pdf,xlsx]
 SQLAlchemy
+psycopg2-binary>=2.9
+pgvector>=0.2.5
 chunkr_ai
-langchain
-langchain-community
-langchain-openai
-langchain-core
-chromadb
-langgraph
 redis
 pytest
 pytest-asyncio

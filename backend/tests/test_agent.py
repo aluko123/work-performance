@@ -278,10 +278,20 @@ class TestAgentIntegration:
             for token in ["Safety", " is", " good"]:
                 yield MagicMock(choices=[MagicMock(delta=MagicMock(content=token, tool_calls=None))])
         
-        mock_create.side_effect = [
-            mock_stream_1(),
-            mock_stream_2()
-        ]
+        # Mock the create call to return the async generator
+        # Since we now await create(), mock it as an async function
+        async def mock_create_impl(*args, **kwargs):
+            # Return the appropriate generator based on call count
+            if not hasattr(mock_create_impl, 'call_count'):
+                mock_create_impl.call_count = 0
+            mock_create_impl.call_count += 1
+            
+            if mock_create_impl.call_count == 1:
+                return mock_stream_1()
+            else:
+                return mock_stream_2()
+        
+        mock_create.side_effect = mock_create_impl
         
         # Mock tool execution
         with patch('backend.agent.TOOL_FUNCTIONS', {

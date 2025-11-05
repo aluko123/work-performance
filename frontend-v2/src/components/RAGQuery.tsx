@@ -84,7 +84,7 @@ export function RAGQuery({ sessionId: propSessionId }: RAGQueryProps = {}) {
 
         try {
             const apiUrl = import.meta.env.VITE_API_BASE_URL;
-            const response = await fetch(`${apiUrl}/api/get_insights`, {
+            const response = await fetch(`${apiUrl}/api/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -123,6 +123,8 @@ export function RAGQuery({ sessionId: propSessionId }: RAGQueryProps = {}) {
                         }
                         try {
                             const data = JSON.parse(jsonString);
+                            
+                            // Handle answer tokens (streaming text)
                             if (data.answer_token) {
                                 setHistory(prev => {
                                     const newHistory = [...prev];
@@ -133,24 +135,21 @@ export function RAGQuery({ sessionId: propSessionId }: RAGQueryProps = {}) {
                                     return newHistory;
                                 });
                             }
-                            if (data.follow_ups) {
+                            
+                            // Handle final complete data (includes bullets, citations, charts, follow-ups)
+                            if (data.answer || data.bullets || data.citations || data.charts || data.follow_ups) {
                                 setHistory(prev => {
                                     const newHistory = [...prev];
                                     const lastMessage = newHistory[newHistory.length - 1];
                                     if (lastMessage && lastMessage.sender === 'ai') {
-                                        lastMessage.followUps = data.follow_ups;
-                                    }
-                                    return newHistory;
-                                });
-                            }
-                            if (data.bullets || data.citations || data.charts) {
-                                setHistory(prev => {
-                                    const newHistory = [...prev];
-                                    const lastMessage = newHistory[newHistory.length - 1];
-                                    if (lastMessage && lastMessage.sender === 'ai') {
-                                        if (data.bullets) lastMessage.bullets = data.bullets;
-                                        if (data.citations) lastMessage.citations = data.citations;
-                                        if (data.charts) lastMessage.charts = data.charts;
+                                        if (data.answer && !lastMessage.text) lastMessage.text = data.answer;
+                                        if (data.bullets && data.bullets.length > 0) lastMessage.bullets = data.bullets;
+                                        if (data.citations && data.citations.length > 0) lastMessage.citations = data.citations;
+                                        if (data.charts && data.charts.length > 0) {
+                                            console.log('📊 Charts received:', data.charts.length, data.charts);
+                                            lastMessage.charts = data.charts;
+                                        }
+                                        if (data.follow_ups && data.follow_ups.length > 0) lastMessage.followUps = data.follow_ups;
                                     }
                                     return newHistory;
                                 });
@@ -188,14 +187,39 @@ export function RAGQuery({ sessionId: propSessionId }: RAGQueryProps = {}) {
         submitQuery(followUp);
     };
 
+    const extractCitationQuote = (snippet?: string): string => {
+        if (!snippet) return '';
+        const firstLine = snippet.split('\n')[0] || snippet;
+        
+        const saidMatch = firstLine.match(/said:\s*['"']?(.*?)['"']?\s*$/i);
+        if (saidMatch?.[1]) return saidMatch[1].trim();
+        
+        const stripped = firstLine.replace(/^On .*? said:\s*/i, '').trim();
+        return stripped.replace(/^['"""]|['"""]$/g, '').trim();
+    };
+
     return (
         <div className="flex flex-col h-[600px]">
             <div className="flex-1 overflow-y-auto p-4 space-y-4" ref={chatContainerRef}>
                 {history.length === 0 && (
-                    <div className="text-center text-muted-foreground py-8">
-                        <Bot className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                        <p>Ask me questions about the meeting analysis!</p>
-                        <p className="text-sm">For example: "What were the main discussion points?" or "How did communication scores trend?"</p>
+                    <div className="text-center text-muted-foreground py-12">
+                        <Bot className="h-16 w-16 mx-auto mb-4 opacity-30" />
+                        <h3 className="text-lg font-semibold mb-2 text-foreground">Ask About Your Analysis</h3>
+                        <p className="text-sm mb-4">I can help you explore trends, compare speakers, and find insights</p>
+                        <div className="max-w-md mx-auto space-y-2 text-left text-xs">
+                            <p className="flex items-start gap-2">
+                                <span className="text-primary">•</span>
+                                <span>"Has safety improved over time?"</span>
+                            </p>
+                            <p className="flex items-start gap-2">
+                                <span className="text-primary">•</span>
+                                <span>"Compare Jordan and Tasha on communication"</span>
+                            </p>
+                            <p className="flex items-start gap-2">
+                                <span className="text-primary">•</span>
+                                <span>"What did people say about quality?"</span>
+                            </p>
+                        </div>
                     </div>
                 )}
                 {history.map((msg, index) => (
@@ -221,7 +245,17 @@ export function RAGQuery({ sessionId: propSessionId }: RAGQueryProps = {}) {
                                     : "bg-muted"
                             )}
                         >
-                            <p className="whitespace-pre-wrap">{msg.text}</p>
+                            <div className="whitespace-pre-wrap prose prose-sm max-w-none dark:prose-invert">
+                                {msg.text.split('\n').map((line, i) => {
+                                    // Simple markdown parsing for bold
+                                    const parsedLine = line
+                                        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                                        .replace(/\*(.+?)\*/g, '<em>$1</em>');
+                                    return (
+                                        <p key={i} dangerouslySetInnerHTML={{ __html: parsedLine }} />
+                                    );
+                                })}
+                            </div>
 
                             {msg.sender === 'ai' && Array.isArray(msg.bullets) && msg.bullets.length > 0 && (
                                 <ul className="mt-2 space-y-1">
@@ -235,7 +269,8 @@ export function RAGQuery({ sessionId: propSessionId }: RAGQueryProps = {}) {
                             )}
 
                             {msg.sender === 'ai' && Array.isArray(msg.charts) && msg.charts.length > 0 && (
-                                <div className="mt-4 space-y-4">
+                                <div className="mt-4 space-y-3">
+                                    <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Visualizations</h4>
                                     {msg.charts.map((chart, i) => (
                                         <ChartRenderer key={i} chart={chart} />
                                     ))}
@@ -243,20 +278,27 @@ export function RAGQuery({ sessionId: propSessionId }: RAGQueryProps = {}) {
                             )}
 
                             {msg.sender === 'ai' && Array.isArray(msg.citations) && msg.citations.length > 0 && (
-                                <div className="mt-3 space-y-2">
-                                    <h4 className="text-sm font-medium text-muted-foreground">Sources:</h4>
-                                    {msg.citations.map((c, i) => (
-                                        <Card key={i} className="p-3">
-                                            <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
-                                                {[c.speaker, c.date, c.timestamp].filter(Boolean).map((item, idx) => (
-                                                    <Badge key={idx} variant="outline" className="text-xs">
-                                                        {item}
-                                                    </Badge>
-                                                ))}
-                                            </div>
-                                            <p className="text-sm">{c.snippet}</p>
-                                        </Card>
-                                    ))}
+                                <div className="mt-4 space-y-2">
+                                    <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Sources</h4>
+                                    {msg.citations.map((c, i) => {
+                                        const quote = extractCitationQuote(c.snippet);
+                                        return (
+                                            <Card key={i} className="p-3 bg-secondary/30">
+                                                <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground mb-2">
+                                                    {[c.speaker, c.date, c.timestamp].filter(Boolean).map((item, idx) => (
+                                                        <Badge key={idx} variant="secondary" className="text-[11px] font-normal">
+                                                            {item}
+                                                        </Badge>
+                                                    ))}
+                                                </div>
+                                                {quote && (
+                                                    <p className="text-sm italic text-foreground/90 leading-relaxed">
+                                                        "{quote}"
+                                                    </p>
+                                                )}
+                                            </Card>
+                                        );
+                                    })}
                                 </div>
                             )}
 

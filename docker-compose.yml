@@ -1,6 +1,22 @@
 
 
 services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: workperf
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-devpassword}
+      POSTGRES_DB: performance
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U workperf -d performance"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   migrate:
     build: .
     command: ["bash", "-lc", "python -c 'from backend.database import init_db; init_db()' && alembic upgrade head"]
@@ -12,6 +28,9 @@ services:
       - .env
     volumes:
       - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   backend:
     build: .
@@ -31,6 +50,8 @@ services:
     security_opt:
       - seccomp:unconfined
     depends_on:
+      postgres:
+        condition: service_healthy
       migrate:
         condition: service_completed_successfully
       redis:
@@ -68,10 +89,13 @@ services:
       - ./bert_classification:/app/bert_classification
       - ./data:/app/data
     depends_on:
+      postgres:
+        condition: service_healthy
       migrate:
         condition: service_completed_successfully
       redis:
         condition: service_started
 
 volumes:
+  postgres-data:
   redis-data:

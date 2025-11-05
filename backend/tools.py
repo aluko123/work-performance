@@ -7,16 +7,15 @@ import os
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 import difflib
-import chromadb
+from sqlalchemy import text
 from openai import OpenAI
 
-from .database import SessionLocal
+from .database import SessionLocal, SQLALCHEMY_DATABASE_URL
 from . import db_models
 from .config.chart_config import AGGREGATED_METRICS, GRANULAR_METRICS, METRIC_DISPLAY_NAMES
 
 # Initialize clients
 openai_client = OpenAI()
-CHROMA_DIR = os.getenv("CHROMA_DIR", "./data/chroma_db")
 
 # Valid metrics
 VALID_METRICS = set(AGGREGATED_METRICS.keys()) | set(GRANULAR_METRICS.keys())
@@ -80,7 +79,7 @@ def search_utterances(
     top_k: int = 5
 ) -> List[Dict[str, Any]]:
     """
-    Search meeting transcripts semantically.
+    Search meeting transcripts semantically using pgvector.
     
     Args:
         query: What to search for (e.g., "safety discussions", "feedback about quality")
@@ -97,38 +96,88 @@ def search_utterances(
     if speaker_error:
         return [{"error": speaker_error}]
     
+    session = SessionLocal()
     try:
-        chroma_client = chromadb.PersistentClient(path=CHROMA_DIR)
-        collection = chroma_client.get_collection("utterances")
-        
-        # Build filters
-        where_filter = {}
-        if speaker:
-            where_filter["speaker"] = speaker
-        
-        # Query ChromaDB
-        results = collection.query(
-            query_texts=[query],
-            n_results=top_k,
-            where=where_filter if where_filter else None
+        # Generate OpenAI embedding for query
+        embedding_response = openai_client.embeddings.create(
+            model="text-embedding-3-small",
+            input=query[:8000]  # Limit text length
         )
+        query_embedding = embedding_response.data[0].embedding
         
-        # Format results
-        utterances = []
-        if results and results["documents"]:
-            for i in range(len(results["documents"][0])):
-                meta = results["metadatas"][0][i] if results["metadatas"] else {}
-                utterances.append({
-                    "speaker": meta.get("speaker"),
-                    "date": meta.get("date"),
-                    "timestamp": meta.get("timestamp"),
-                    "text": results["documents"][0][i],
-                    "source_id": meta.get("source_id")
-                })
-        
-        return utterances
+        # Use pgvector for Postgres, fallback to simple text search for SQLite
+        if "postgresql" in SQLALCHEMY_DATABASE_URL:
+            # Set ivfflat probes for better recall
+            session.execute(text("SET ivfflat.probes = 10"))
+            
+            # Build WHERE clause dynamically
+            where_clauses = ["embedding IS NOT NULL"]
+            params = {"embedding": query_embedding, "top_k": top_k}
+            
+            if speaker:
+                where_clauses.append("speaker = :speaker")
+                params["speaker"] = speaker
+            if date_from:
+                where_clauses.append("date >= :date_from")
+                params["date_from"] = date_from
+            if date_to:
+                where_clauses.append("date <= :date_to")
+                params["date_to"] = date_to
+            
+            where_clause = " AND ".join(where_clauses)
+            
+            # Query with pgvector similarity search
+            sql = text(f"""
+                SELECT speaker, date, "timestamp", text,
+                       1 - (embedding <=> :embedding::vector) AS similarity
+                FROM utterances
+                WHERE {where_clause}
+                ORDER BY embedding <=> :embedding::vector
+                LIMIT :top_k
+            """)
+            
+            rows = session.execute(sql, params).mappings().all()
+            
+            return [
+                {
+                    "speaker": r["speaker"],
+                    "date": r["date"],
+                    "timestamp": r["timestamp"],
+                    "text": r["text"],
+                    "similarity": round(float(r["similarity"]), 3)
+                }
+                for r in rows
+            ]
+        else:
+            # SQLite fallback: simple text search (no embeddings)
+            query_obj = session.query(db_models.Utterance)
+            
+            if speaker:
+                query_obj = query_obj.filter(db_models.Utterance.speaker == speaker)
+            if date_from:
+                query_obj = query_obj.filter(db_models.Utterance.date >= date_from)
+            if date_to:
+                query_obj = query_obj.filter(db_models.Utterance.date <= date_to)
+            
+            # Simple text contains search
+            query_obj = query_obj.filter(db_models.Utterance.text.contains(query))
+            
+            utterances = query_obj.limit(top_k).all()
+            
+            return [
+                {
+                    "speaker": u.speaker,
+                    "date": u.date,
+                    "timestamp": u.timestamp,
+                    "text": u.text
+                }
+                for u in utterances
+            ]
+            
     except Exception as e:
         return [{"error": f"Search failed: {str(e)}"}]
+    finally:
+        session.close()
 
 
 def list_speakers() -> Dict[str, Any]:
@@ -313,6 +362,79 @@ def compare_periods(
     }
 
 
+def generate_chart(
+    chart_type: str,
+    metric: str,
+    speaker: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Generate chart data for visualization.
+    
+    Args:
+        chart_type: Type of chart - "line" for trends over time, "bar" for speaker comparison
+        metric: Metric name (e.g., "SAFETY_Score", "comm_Pausing")
+        speaker: Filter by speaker (for line chart) or compare multiple speakers (for bar chart, leave None)
+        date_from: Start date YYYY-MM-DD
+        date_to: End date YYYY-MM-DD
+    
+    Returns:
+        Chart configuration with data ready for frontend rendering
+    """
+    from .services import get_chart_data
+    
+    # VALIDATE INPUTS
+    metric_error = validate_metric(metric)
+    if metric_error:
+        return {"error": metric_error}
+    
+    speaker_error = validate_speaker(speaker)
+    if speaker_error:
+        return {"error": speaker_error}
+    
+    if chart_type not in ["line", "bar"]:
+        return {"error": "chart_type must be 'line' or 'bar'"}
+    
+    session = SessionLocal()
+    try:
+        filters = {}
+        if speaker:
+            filters["speaker"] = speaker
+        if date_from:
+            filters["date_from"] = date_from
+        if date_to:
+            filters["date_to"] = date_to
+        
+        # Determine group_by based on chart_type
+        group_by = "date" if chart_type == "line" else "speaker"
+        
+        chart_data = get_chart_data(
+            db=session,
+            chart_type=chart_type,
+            metric=metric,
+            group_by=group_by,
+            filters=filters
+        )
+        
+        if not chart_data:
+            return {"error": "No data available for chart"}
+        
+        return {
+            "type": chart_type,
+            "metric": metric,
+            "data": chart_data,
+            "config": {
+                "title": METRIC_DISPLAY_NAMES.get(metric, metric),
+                "xAxisLabel": "Date" if chart_type == "line" else "Speaker",
+                "yAxisLabel": "Score",
+                "filters": filters
+            }
+        }
+    finally:
+        session.close()
+
+
 # Tool definitions for OpenAI function calling
 TOOL_DEFINITIONS = [
     {
@@ -437,6 +559,40 @@ TOOL_DEFINITIONS = [
                 "required": ["metric", "early_start", "early_end", "late_start", "late_end"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_chart",
+            "description": "Generate a chart visualization for metrics. Use this when user wants to see trends or comparisons visually. Line charts show trends over time, bar charts compare speakers.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "chart_type": {
+                        "type": "string",
+                        "enum": ["line", "bar"],
+                        "description": "Type of chart: 'line' for time trends, 'bar' for speaker comparison"
+                    },
+                    "metric": {
+                        "type": "string",
+                        "description": "Metric name (e.g., SAFETY_Score, comm_Pausing)"
+                    },
+                    "speaker": {
+                        "type": "string",
+                        "description": "Optional: Filter by speaker (for line charts) or leave empty to compare all speakers (for bar charts)"
+                    },
+                    "date_from": {
+                        "type": "string",
+                        "description": "Optional: Start date YYYY-MM-DD"
+                    },
+                    "date_to": {
+                        "type": "string",
+                        "description": "Optional: End date YYYY-MM-DD"
+                    }
+                },
+                "required": ["chart_type", "metric"]
+            }
+        }
     }
 ]
 
@@ -448,4 +604,5 @@ TOOL_FUNCTIONS = {
     "search_utterances": search_utterances,
     "get_metric_stats": get_metric_stats,
     "compare_periods": compare_periods,
+    "generate_chart": generate_chart,
 }

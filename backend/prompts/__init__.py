@@ -8,14 +8,7 @@ from .extraction import (
     chunk_system,
 )
 
-from .rag import (
-    answer_system,
-    answer_user_template,
-    metadata_system,
-    metadata_user_template,
-    verification_system,
-    verification_user_template,
-)
+# Removed deprecated RAG prompts
 
 __all__ = [
     "system_date_expert",
@@ -25,9 +18,5 @@ __all__ = [
     "single_shot_system",
     "single_shot_user",
     "chunk_system",
-    "answer_system",
-    "answer_user_template",
-    "metadata_system",
-    "metadata_user_template",
 ]
 
