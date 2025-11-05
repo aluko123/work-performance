@@ -43,6 +43,12 @@ interface ChartRendererProps {
 export function ChartRenderer({ chart }: ChartRendererProps) {
   const { type, data, config } = chart;
 
+  // Validate required fields
+  if (!data || !data.labels || !data.datasets) {
+    console.error('Invalid chart data:', chart);
+    return null;
+  }
+
   // Transform data from backend format to Recharts format
   const chartData = data.labels.map((label, idx) => {
     const point: Record<string, string | number> = { name: label };
@@ -52,7 +58,7 @@ export function ChartRenderer({ chart }: ChartRendererProps) {
     return point;
   });
 
-  const colors = config.colors || [
+  const colors = config?.colors || [
     '#8884d8',
     '#82ca9d',
     '#ffc658',
@@ -64,7 +70,7 @@ export function ChartRenderer({ chart }: ChartRendererProps) {
     return (
       <Card className="w-full">
         <CardHeader>
-          <CardTitle className="text-base font-medium">{config.title}</CardTitle>
+          <CardTitle className="text-base font-medium">{config?.title || 'Performance Trend'}</CardTitle>
         </CardHeader>
         <CardContent>
           <ResponsiveContainer width="100%" height={300}>
@@ -72,20 +78,20 @@ export function ChartRenderer({ chart }: ChartRendererProps) {
               <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
               <XAxis
                 dataKey="name"
-                label={{
+                label={config?.xAxisLabel ? {
                   value: config.xAxisLabel,
                   position: 'insideBottom',
                   offset: -5,
-                }}
+                } : undefined}
                 className="text-xs"
               />
               <YAxis
-                domain={config.yDomain || [0, 'auto']}
-                label={{
+                domain={config?.yDomain || [0, 'auto']}
+                label={config?.yAxisLabel ? {
                   value: config.yAxisLabel,
                   angle: -90,
                   position: 'insideLeft',
-                }}
+                } : undefined}
                 className="text-xs"
               />
               <Tooltip
@@ -118,7 +124,7 @@ export function ChartRenderer({ chart }: ChartRendererProps) {
     return (
       <Card className="w-full">
         <CardHeader>
-          <CardTitle className="text-base font-medium">{config.title}</CardTitle>
+          <CardTitle className="text-base font-medium">{config?.title || 'Performance Comparison'}</CardTitle>
         </CardHeader>
         <CardContent>
           <ResponsiveContainer width="100%" height={300}>
@@ -126,20 +132,20 @@ export function ChartRenderer({ chart }: ChartRendererProps) {
               <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
               <XAxis
                 dataKey="name"
-                label={{
+                label={config?.xAxisLabel ? {
                   value: config.xAxisLabel,
                   position: 'insideBottom',
                   offset: -5,
-                }}
+                } : undefined}
                 className="text-xs"
               />
               <YAxis
-                domain={config.yDomain || [0, 'auto']}
-                label={{
+                domain={config?.yDomain || [0, 'auto']}
+                label={config?.yAxisLabel ? {
                   value: config.yAxisLabel,
                   angle: -90,
                   position: 'insideLeft',
-                }}
+                } : undefined}
                 className="text-xs"
               />
               <Tooltip

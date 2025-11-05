@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = '5a2c3b7a9f10'
-down_revision = None
+down_revision = '1a2b3c4d5e6f'  # Depends on initial schema
 branch_labels = None
 depends_on = None
 
@@ -20,7 +20,7 @@ depends_on = None
 def upgrade() -> None:
     op.add_column(
         'utterances',
-        sa.Column('is_indexed', sa.Boolean(), nullable=False, server_default=sa.text('0'))
+        sa.Column('is_indexed', sa.Boolean(), nullable=False, server_default=sa.text('false'))
     )
 
 

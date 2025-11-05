@@ -65,12 +65,42 @@ def build_system_prompt() -> str:
 
 **How to answer:**
 - **IMPORTANT:** If unsure about a speaker's name, use **list_speakers** first to check availability
-- Use **search_utterances** to find what people said
+- **When users ask "what did X say" or "what was discussed"**, ALWAYS use **search_utterances** to find actual quotes
 - Use **get_metric_stats** for current stats (can filter by speaker/dates)
 - Use **compare_periods** for temporal questions (use the periods above)
-- If you get an error from a tool (e.g., "Speaker not found"), tell the user directly - don't guess or substitute
-- Always cite specific numbers, dates, speakers
-- Be conversational, proactive, helpful
+
+**Metric Inference:**
+When users don't specify a metric:
+- "behavior", "performance" → Use PEOPLE_Score (overall)
+- "communication" → Use comm_Clarifying_Questions or Total_Comm_Score
+- "safety" → Use SAFETY_Score
+- When unclear, default to PEOPLE_Score and mention which metric you chose
+
+**Chart Generation - MANDATORY (DO NOT SKIP):**
+You MUST generate a chart for every trend/comparison question. This is non-negotiable.
+
+1. **Trend questions** ("improved", "changed", "over time", "trends", "behavior over time"):
+   - Call compare_periods or get_metric_stats
+   - IMMEDIATELY after, ALWAYS call: generate_chart(chart_type="line", metric=X, speaker=Y if specified)
+   
+2. **Comparison questions** ("compare", "vs", "versus", ANY question comparing 2+ people):
+   - Step 1: Call get_metric_stats for each speaker
+   - Step 2 (REQUIRED): Call generate_chart(chart_type="bar", metric=X)
+   - Example: "Compare A and B on safety" → get_metric_stats(SAFETY_Score, A), get_metric_stats(SAFETY_Score, B), then generate_chart(bar, SAFETY_Score)
+   - Never finish a comparison without calling generate_chart
+
+**Citations - REQUIRED:**
+For questions about specific speakers ("Tasha's behavior", "what Rosa said"):
+- ALWAYS call: search_utterances(speaker=X, query="relevant topic", top_k=3)
+- Include 2-3 short quotes in your answer
+
+**Response Format for Chat:**
+- Start with 3-5 SHORT bullets (plain text, NO markdown bold/italic)
+- Then 1-2 sentences of context
+- Be concise and scannable
+- NEVER include markdown images (![...])
+- Always cite specific numbers, dates
+- If error, tell user directly
 
 **Context:** Remember the conversation. "What about Mike?" after asking about Tasha means Mike's data on the same metric.
 """
@@ -112,10 +142,11 @@ async def run_agent(
         
         # Call OpenAI with tools
         try:
-            response = client.chat.completions.create(
+            response = await client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=clean_messages,
                 tools=TOOL_DEFINITIONS,
+                temperature=0.2,  # Lower temp for more consistent, deterministic responses
                 stream=True
             )
         except Exception as e:
@@ -166,9 +197,23 @@ async def run_agent(
             tool_calls_list = list(tool_call_buffer.values())
             yield {"type": "status", "message": f"🔍 Using {len(tool_calls_list)} tool(s)..."}
             
+            # Track what tools were called for chart enforcement
+            called_tools = set()
+            metric_used = None
+            speakers_queried = []
+            
             for tool_call in tool_calls_list:
                 func_name = tool_call["function"]["name"]
                 func_args = json.loads(tool_call["function"]["arguments"])
+                called_tools.add(func_name)
+                
+                # Track metric and speakers for auto-chart generation
+                if func_name == "get_metric_stats":
+                    metric_used = func_args.get("metric")
+                    if "speaker" in func_args:
+                        speakers_queried.append(func_args["speaker"])
+                elif func_name == "compare_periods":
+                    metric_used = func_args.get("metric")
                 
                 # Execute tool
                 yield {"type": "status", "message": f"📊 Fetching {func_name}..."}
@@ -178,11 +223,73 @@ async def run_agent(
                 else:
                     result = {"error": f"Unknown tool: {func_name}"}
                 
+                # Emit tool result for main.py to process
+                yield {"type": "tool_result", "tool_name": func_name, "result": result}
+                
                 # Add tool result to messages
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call["id"],
                     "content": json.dumps(result)
+                })
+            
+            # 🔒 ENFORCE CHART GENERATION (programmatic fail-safe)
+            # If LLM called comparison/trend tools but forgot to call generate_chart, inject it
+            should_have_chart = False
+            chart_type = None
+            chart_reason = None
+            
+            # Detect comparison query (multiple speakers queried)
+            if "get_metric_stats" in called_tools and len(speakers_queried) >= 2:
+                should_have_chart = True
+                chart_type = "bar"
+                chart_reason = f"comparison of {len(speakers_queried)} speakers on {metric_used}"
+            
+            # Detect trend query (compare_periods called)
+            elif "compare_periods" in called_tools:
+                should_have_chart = True
+                chart_type = "line"
+                chart_reason = f"trend analysis for {metric_used}"
+            
+            # Auto-inject chart if needed and not already called
+            if should_have_chart and "generate_chart" not in called_tools and metric_used:
+                print(f"🔒 Auto-injecting chart generation (LLM forgot): {chart_reason}")
+                yield {"type": "status", "message": f"📊 Generating chart for {chart_reason}..."}
+                
+                # Build chart arguments
+                chart_args = {"chart_type": chart_type, "metric": metric_used}
+                if speakers_queried:
+                    chart_args["speakers"] = speakers_queried
+                
+                # Execute chart generation
+                chart_result = TOOL_FUNCTIONS["generate_chart"](**chart_args)
+                
+                # Emit chart result
+                yield {"type": "tool_result", "tool_name": "generate_chart", "result": chart_result}
+                
+                # Add synthetic tool call and result to messages
+                # This makes the LLM aware a chart was generated
+                synthetic_tool_call_id = f"auto_chart_{iteration}"
+                
+                # Add assistant message with the auto-injected tool call
+                messages.append({
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": synthetic_tool_call_id,
+                        "type": "function",
+                        "function": {
+                            "name": "generate_chart",
+                            "arguments": json.dumps(chart_args)
+                        }
+                    }]
+                })
+                
+                # Add tool result
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": synthetic_tool_call_id,
+                    "content": json.dumps(chart_result)
                 })
             
             # Continue loop to let LLM synthesize

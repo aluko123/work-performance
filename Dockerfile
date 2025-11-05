@@ -26,6 +26,9 @@ COPY ./backend ./backend
 COPY alembic.ini ./alembic.ini
 COPY migrations ./migrations
 
+# Copy scripts for data migration
+COPY scripts ./scripts
+
 # Expose port 8000 to the outside world
 EXPOSE 8000
 

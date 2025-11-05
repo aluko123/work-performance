@@ -14,8 +14,7 @@ from sqlalchemy import func
 from typing import List
 from transformers import BertModel
 import redis
-from langchain_community.cache import RedisCache
-from langchain_core.globals import set_llm_cache
+# Removed: LangChain imports (not needed anymore)
 from arq import create_pool
 from arq.connections import RedisSettings
 import msgpack
@@ -23,11 +22,11 @@ import msgpack
 # Local imports
 from . import db_models
 from .database import SessionLocal, init_db
-from .models import Analysis as AnalysisModel, AnalysesResponse, MultiTaskBertModel, TrendsResponse, RAGQuery, RAGAnswer, AsyncTask
+from .models import Analysis as AnalysisModel, AnalysesResponse, MultiTaskBertModel, TrendsResponse, AsyncTask, RAGQuery
 from .services import get_speaker_trends
 from .document_extractor import RobustMeetingExtractor
-from .rag_service import PerformanceRAG
-from .rag_graph import RAGGraph
+# Deprecated: RAG system replaced by simple pgvector search in tools.py
+# Removed deprecated RAG imports
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 # --- Configuration ---
@@ -66,42 +65,12 @@ async def lifespan(app: FastAPI):
     await app.state.arq_pool.enqueue_job("startup_indexing_task")
     print("Enqueued startup indexing task.")
 
-    # --- Caching, Model Loading, etc. (remains the same) ---
-    # Initialize LangChain LLM cache (Redis) for deterministic caching of LLM calls
-    try:
-        import redis as _redis
-        redis_cache_url = os.getenv("REDIS_URL") or os.getenv("ARQ_REDIS_URL") or "redis://redis:6379/0"
-        cache = None
-        # Try community helper if available
-        try:
-            cache = RedisCache.from_url(redis_cache_url)  # type: ignore[attr-defined]
-        except Exception:
-            client = _redis.from_url(redis_cache_url)
-            # Try possible constructor signatures across versions
-            try:
-                cache = RedisCache(client)
-            except TypeError:
-                cache = RedisCache(redis_client=client)  # type: ignore[call-arg]
-        if cache is not None:
-            set_llm_cache(cache)
-            print(f"LangChain LLM cache configured with Redis at {redis_cache_url}")
-        else:
-            print("Warning: could not initialize RedisCache (unknown constructor).")
-    except Exception as e:
-        print(f"Warning: failed to set LangChain LLM cache: {e}")
+    # Removed: LangChain LLM cache initialization (no longer using LangChain)
 
     print("Loading models and other resources...")
     # NOTE: The original blocking indexing logic is now removed from here.
 
-    # --- Initialize RAG Graph for chatbot endpoint ---
-    # Ensure attribute exists even if initialization fails, so endpoint returns a clear 500
-    app.state.rag_graph = None
-    try:
-        app.state.rag_graph = RAGGraph()
-        print("RAG graph initialized and attached to app state.")
-    except Exception as e:
-        # Keep None and log; endpoint will respond with a controlled 500
-        print(f"Failed to initialize RAG graph: {e}")
+    # RAG Graph removed - using OpenAI native SDK in /api/chat instead
     
     yield
     
@@ -269,6 +238,9 @@ async def chat_endpoint(query: RAGQuery):
     async def stream_generator():
         answer_text = ""
         tool_calls_made = 0
+        charts = []
+        citations = []
+        seen_sources = set()  # Track unique sources across all tool calls
         
         async for chunk in run_agent(query.question, query.session_id or "default"):
             chunk_type = chunk.get("type")
@@ -282,18 +254,67 @@ async def chat_endpoint(query: RAGQuery):
                 # Stream progress updates
                 yield f"data: {json.dumps({'status': chunk['message']})}\n\n"
             
+            elif chunk_type == "tool_result":
+                # Extract chart data and citations from tool results
+                result = chunk.get("result", {})
+                tool_name = chunk.get("tool_name", "")
+                
+                print(f"🔍 Tool result: {tool_name}, has 'type': {result.get('type') if isinstance(result, dict) else 'N/A'}")
+                
+                # Extract charts
+                if isinstance(result, dict) and result.get("type") in ["line", "bar"]:
+                    print(f"✅ Adding chart: {result.get('type')} for {result.get('metric')}")
+                    charts.append(result)
+                
+                # Extract citations from search_utterances
+                if tool_name == "search_utterances" and isinstance(result, list):
+                    for item in result:
+                        if isinstance(item, dict) and not item.get("error"):
+                            source_id = item.get("source_id")
+                            # Fallback dedupe key if source_id is missing
+                            fallback_key = f"{item.get('speaker','')}|{item.get('date','')}|{item.get('timestamp','')}|{hash((item.get('text') or '')[:100])}"
+                            key = source_id or fallback_key
+                            
+                            # Only add if we haven't seen this source and under limit
+                            if key not in seen_sources and len(citations) < 3:
+                                seen_sources.add(key)
+                                citations.append({
+                                    "speaker": item.get("speaker"),
+                                    "date": item.get("date"),
+                                    "timestamp": item.get("timestamp"),
+                                    "snippet": item.get("text", "")[:500]  # First 500 chars
+                                })
+            
             elif chunk_type == "final":
                 tool_calls_made = chunk.get("tool_calls_made", 0)
                 answer_text = chunk["answer"]
         
         # After streaming complete, send structured data
-        # Extract simple bullets from answer (split by newlines/bullets if present)
+        # Strip markdown images from answer (LLM sometimes generates them)
+        import re
+        answer_text = re.sub(r'!\[.*?\]\(.*?\)', '', answer_text)
+        
+        # Helper to strip markdown formatting from bullets
+        def strip_md(s):
+            s = re.sub(r'\*\*(.*?)\*\*', r'\1', s)  # Bold
+            s = re.sub(r'__(.*?)__', r'\1', s)  # Underline
+            s = re.sub(r'\*([^\*]*)\*', r'\1', s)  # Italic (single *)
+            s = re.sub(r'_([^_]*)_', r'\1', s)  # Italic (single _)
+            s = re.sub(r'`([^`]*)`', r'\1', s)  # Code
+            s = re.sub(r'\[(.*?)\]\([^\)]*\)', r'\1', s)  # Links
+            s = re.sub(r'^#+\s*', '', s)  # Headers
+            return s.strip()
+        
+        # Extract bullets and strip markdown
         bullets = []
         lines = answer_text.split('\n')
         for line in lines:
-            line = line.strip()
-            if line.startswith(('- ', '• ', '* ')) and len(line) > 5:
-                bullets.append(line.lstrip('- •* '))
+            raw = line.strip()
+            # Match bullets (-, *, •) or numbered lists (1., 2., etc.)
+            if re.match(r'^(\-|\*|•)\s+.+', raw) or re.match(r'^\d+\.\s+.+', raw):
+                content = re.sub(r'^(\-|\*|•|\d+\.)\s+', '', raw)
+                bullets.append(strip_md(content))
+        bullets = bullets[:6]  # Keep it tight
         
         # Generate smart follow-ups based on conversation
         follow_ups = [
@@ -303,18 +324,19 @@ async def chat_endpoint(query: RAGQuery):
         ]
         
         # Send final structured payload
+        print(f"📤 Final payload: {len(charts)} charts, {len(citations)} citations, {len(bullets)} bullets")
         yield f"data: {json.dumps({'follow_ups': follow_ups})}\n\n"
         yield f"data: {json.dumps({'bullets': bullets})}\n\n"
-        yield f"data: {json.dumps({'citations': []})}\n\n"
-        yield f"data: {json.dumps({'charts': []})}\n\n"
+        yield f"data: {json.dumps({'citations': citations})}\n\n"
+        yield f"data: {json.dumps({'charts': charts})}\n\n"
         
         # Final complete payload
         final_data = {
             "answer": answer_text,
             "bullets": bullets,
             "follow_ups": follow_ups,
-            "citations": [],
-            "charts": [],
+            "citations": citations,
+            "charts": charts,
             "metadata": {
                 "tool_calls": tool_calls_made,
                 "analysis_type": "agent_based"
@@ -325,26 +347,4 @@ async def chat_endpoint(query: RAGQuery):
     return StreamingResponse(stream_generator(), media_type="text/event-stream")
 
 
-@app.post("/api/get_insights")
-async def rag_query_endpoint(query: RAGQuery, request: Request):
-    """Legacy endpoint - will be deprecated after migration"""
-    rag_graph: RAGGraph = request.app.state.rag_graph
-    if not rag_graph:
-        raise HTTPException(status_code=500, detail="RAG graph is not available.")
-
-    async def stream_generator():
-        final_data = {}
-        async for chunk in rag_graph.astream_run(
-            question=query.question, session_id=query.session_id,
-            filters={
-                "speaker": query.speaker, "date_from": query.date_from,
-                "date_to": query.date_to, "top_k": query.top_k,
-            },
-        ):
-            if "answer_token" in chunk:
-                yield f"data: {json.dumps({'answer_token': chunk['answer_token']})}\n\n"
-            else:
-                final_data = chunk
-        yield f"data: {json.dumps(final_data)}\n\n"
-
-    return StreamingResponse(stream_generator(), media_type="text/event-stream")
+# REMOVED: /api/get_insights endpoint (deprecated, use /api/chat instead)

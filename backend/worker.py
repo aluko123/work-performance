@@ -13,7 +13,7 @@ from openai import AsyncOpenAI
 from .database import SessionLocal
 from .document_extractor import RobustMeetingExtractor
 from .services import analyze_structured_transcript, save_analysis_results, get_all_utterances
-from .rag_service import PerformanceRAG
+from .embeddings import generate_embeddings_for_utterances
 from .models import MultiTaskBertModel
 from .db_models import Utterance
 
@@ -149,42 +149,25 @@ async def process_document_task(ctx, file_contents: bytes, filename: str, corr_i
 
 async def index_utterances_task(ctx, utterance_ids: list[int]):
     """
-    Arq task to index a batch of utterances.
+    Arq task to generate embeddings for utterances and store in pgvector.
     """
     if not utterance_ids:
         return {"status": "SKIPPED", "message": "No utterance IDs provided."}
 
-    print(f"Starting indexing for {len(utterance_ids)} utterances.")
-    db: Session = SessionLocal()
+    print(f"Starting embedding generation for {len(utterance_ids)} utterances.")
+    
     try:
-        # 1. Fetch the utterances from the database
-        utterances_to_index = db.query(Utterance).filter(Utterance.id.in_(utterance_ids)).all()
+        # Generate embeddings and update is_indexed flag
+        indexed_count = generate_embeddings_for_utterances(utterance_ids)
         
-        if not utterances_to_index:
-            print("No valid utterances found for the given IDs.")
-            return {"status": "SKIPPED", "message": "No utterances found in DB."}
-
-        # 2. Index the utterances
-        # In a real app, the RAG service might be a singleton or managed differently.
-        rag_service = PerformanceRAG()
-        rag_service.index_utterances(utterances_to_index)
-        print(f"Successfully indexed {len(utterances_to_index)} utterances.")
-
-        # 3. Update the is_indexed flag
-        for utt in utterances_to_index:
-            utt.is_indexed = True
+        if indexed_count == 0:
+            return {"status": "SKIPPED", "message": "No utterances needed indexing."}
         
-        db.commit()
-        print(f"Marked {len(utterances_to_index)} utterances as indexed.")
-
-        return {"status": "COMPLETED", "indexed_count": len(utterances_to_index)}
+        return {"status": "COMPLETED", "indexed_count": indexed_count}
 
     except Exception as e:
         print(f"Error during indexing task: {e}")
-        db.rollback()
         return {"status": "FAILED", "error": str(e)}
-    finally:
-        db.close()
 
 
 async def startup_indexing_task(ctx):
