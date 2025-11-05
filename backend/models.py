@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 import torch
@@ -25,7 +25,7 @@ class Analysis(BaseModel):
     id: int
     source_filename: str
     created_at: datetime
-    utterances: List[Utterance] = []
+    utterances: List[Utterance] = Field(default_factory=list)
     job_id: Optional[str] = None
 
     class Config:
@@ -126,4 +126,3 @@ class RAGAnswer(BaseModel):
     follow_ups: List[str] = []
     charts: List[Chart] = []  # NEW: Chart data
     metadata: Dict[str, Any] = {}
-

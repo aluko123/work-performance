@@ -12,13 +12,16 @@ from openai import OpenAI
 
 from .database import SessionLocal, SQLALCHEMY_DATABASE_URL
 from . import db_models
-from .config.chart_config import AGGREGATED_METRICS, GRANULAR_METRICS, METRIC_DISPLAY_NAMES
+from .config.chart_config import AGGREGATED_METRICS, GRANULAR_METRICS
+from . import metrics as metrics_registry
 
 # Initialize clients
 openai_client = OpenAI()
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
 
-# Valid metrics
-VALID_METRICS = set(AGGREGATED_METRICS.keys()) | set(GRANULAR_METRICS.keys())
+def _available_metric_set() -> set:
+    # Dynamic metrics from mapping + ensure aggregated are present
+    return set(metrics_registry.get_available_metrics()) | set(AGGREGATED_METRICS.keys())
 
 
 def get_valid_speakers() -> List[str]:
@@ -60,9 +63,12 @@ def validate_metric(metric: str) -> Optional[str]:
     if not metric:
         return None
     
-    if metric not in VALID_METRICS:
+    # Normalize common suffix noise
+    cleaned = metric.replace('.1', '') if metric else metric
+    available = _available_metric_set()
+    if cleaned not in available:
         # Find close matches
-        close_matches = difflib.get_close_matches(metric, VALID_METRICS, n=3, cutoff=0.6)
+        close_matches = difflib.get_close_matches(cleaned or "", available, n=3, cutoff=0.6)
         if close_matches:
             return f"Metric '{metric}' not found. Did you mean: {', '.join(close_matches)}?"
         else:
@@ -98,82 +104,60 @@ def search_utterances(
     
     session = SessionLocal()
     try:
+        # Ensure Postgres
+        if "postgresql" not in (SQLALCHEMY_DATABASE_URL or "").lower():
+            return [{"error": "Semantic search requires Postgres + pgvector"}]
+
         # Generate OpenAI embedding for query
         embedding_response = openai_client.embeddings.create(
-            model="text-embedding-3-small",
+            model=EMBEDDING_MODEL,
             input=query[:8000]  # Limit text length
         )
         query_embedding = embedding_response.data[0].embedding
-        
-        # Use pgvector for Postgres, fallback to simple text search for SQLite
-        if "postgresql" in SQLALCHEMY_DATABASE_URL:
-            # Set ivfflat probes for better recall
-            session.execute(text("SET ivfflat.probes = 10"))
-            
-            # Build WHERE clause dynamically
-            where_clauses = ["embedding IS NOT NULL"]
-            params = {"embedding": query_embedding, "top_k": top_k}
-            
-            if speaker:
-                where_clauses.append("speaker = :speaker")
-                params["speaker"] = speaker
-            if date_from:
-                where_clauses.append("date >= :date_from")
-                params["date_from"] = date_from
-            if date_to:
-                where_clauses.append("date <= :date_to")
-                params["date_to"] = date_to
-            
-            where_clause = " AND ".join(where_clauses)
-            
-            # Query with pgvector similarity search
-            sql = text(f"""
-                SELECT speaker, date, "timestamp", text,
-                       1 - (embedding <=> :embedding::vector) AS similarity
-                FROM utterances
-                WHERE {where_clause}
-                ORDER BY embedding <=> :embedding::vector
-                LIMIT :top_k
-            """)
-            
-            rows = session.execute(sql, params).mappings().all()
-            
-            return [
-                {
-                    "speaker": r["speaker"],
-                    "date": r["date"],
-                    "timestamp": r["timestamp"],
-                    "text": r["text"],
-                    "similarity": round(float(r["similarity"]), 3)
-                }
-                for r in rows
-            ]
-        else:
-            # SQLite fallback: simple text search (no embeddings)
-            query_obj = session.query(db_models.Utterance)
-            
-            if speaker:
-                query_obj = query_obj.filter(db_models.Utterance.speaker == speaker)
-            if date_from:
-                query_obj = query_obj.filter(db_models.Utterance.date >= date_from)
-            if date_to:
-                query_obj = query_obj.filter(db_models.Utterance.date <= date_to)
-            
-            # Simple text contains search
-            query_obj = query_obj.filter(db_models.Utterance.text.contains(query))
-            
-            utterances = query_obj.limit(top_k).all()
-            
-            return [
-                {
-                    "speaker": u.speaker,
-                    "date": u.date,
-                    "timestamp": u.timestamp,
-                    "text": u.text
-                }
-                for u in utterances
-            ]
-            
+
+        # Set ivfflat probes for better recall
+        session.execute(text("SET ivfflat.probes = 10"))
+
+        # Build WHERE clause dynamically
+        where_clauses = ["embedding IS NOT NULL"]
+        params = {"embedding": query_embedding, "top_k": top_k}
+
+        if speaker:
+            where_clauses.append("speaker = :speaker")
+            params["speaker"] = speaker
+        if date_from:
+            where_clauses.append("date >= :date_from")
+            params["date_from"] = date_from
+        if date_to:
+            where_clauses.append("date <= :date_to")
+            params["date_to"] = date_to
+
+        where_clause = " AND ".join(where_clauses)
+
+        # Query with pgvector similarity search
+        sql = text(f"""
+            SELECT id, speaker, date, "timestamp", text,
+                   1 - (embedding <=> :embedding::vector) AS similarity
+            FROM utterances
+            WHERE {where_clause}
+            ORDER BY embedding <=> :embedding::vector
+            LIMIT :top_k
+        """)
+
+        rows = session.execute(sql, params).mappings().all()
+
+        return [
+            {
+                "source_id": r["id"],
+                "speaker": r["speaker"],
+                "date": r["date"],
+                "timestamp": r["timestamp"],
+                "text": r["text"],
+                "similarity": round(float(r["similarity"]), 3)
+            }
+            for r in rows
+        ]
+
     except Exception as e:
         return [{"error": f"Search failed: {str(e)}"}]
     finally:
@@ -202,15 +186,12 @@ def list_metrics() -> Dict[str, Any]:
     Returns:
         Categorized metrics with descriptions
     """
+    # Full dynamic mapping
+    all_keys = metrics_registry.get_available_metrics()
+    agg_keys = set(AGGREGATED_METRICS.keys())
     return {
-        "aggregated_metrics": {
-            name: METRIC_DISPLAY_NAMES.get(name, name)
-            for name in AGGREGATED_METRICS.keys()
-        },
-        "granular_metrics": {
-            name: METRIC_DISPLAY_NAMES.get(name, name)
-            for name in list(GRANULAR_METRICS.keys())[:20]  # Show sample
-        }
+        "aggregated_metrics": {k: metrics_registry.get_metric_display_name(k) for k in all_keys if k in agg_keys},
+        "granular_metrics": {k: metrics_registry.get_metric_display_name(k) for k in all_keys if k not in agg_keys},
     }
 
 
@@ -364,10 +345,12 @@ def compare_periods(
 
 def generate_chart(
     chart_type: str,
-    metric: str,
+    metric: Optional[str] = None,
     speaker: Optional[str] = None,
     date_from: Optional[str] = None,
-    date_to: Optional[str] = None
+    date_to: Optional[str] = None,
+    metrics: Optional[List[str]] = None,
+    speakers: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
     Generate chart data for visualization.
@@ -385,21 +368,34 @@ def generate_chart(
     from .services import get_chart_data
     
     # VALIDATE INPUTS
-    metric_error = validate_metric(metric)
-    if metric_error:
-        return {"error": metric_error}
+    if chart_type == "grouped_bar":
+        # grouped_bar requires a list of metrics, and optionally a speaker filter
+        if not metrics or not isinstance(metrics, list):
+            return {"error": "'metrics' (list) is required for grouped_bar charts"}
+        # Validate each metric
+        for m in metrics:
+            err = validate_metric(m)
+            if err:
+                return {"error": err}
+    else:
+        metric_error = validate_metric(metric)
+        if metric_error:
+            return {"error": metric_error}
     
     speaker_error = validate_speaker(speaker)
     if speaker_error:
         return {"error": speaker_error}
     
-    if chart_type not in ["line", "bar"]:
-        return {"error": "chart_type must be 'line' or 'bar'"}
+    if chart_type not in ["line", "bar", "grouped_bar"]:
+        return {"error": "chart_type must be 'line', 'bar', or 'grouped_bar'"}
     
     session = SessionLocal()
     try:
         filters = {}
-        if speaker:
+        if speakers:
+            # For comparison charts, filter to specific speakers
+            filters["speakers"] = speakers
+        elif speaker:
             filters["speaker"] = speaker
         if date_from:
             filters["date_from"] = date_from
@@ -407,12 +403,18 @@ def generate_chart(
             filters["date_to"] = date_to
         
         # Determine group_by based on chart_type
-        group_by = "date" if chart_type == "line" else "speaker"
+        if chart_type == "line":
+            group_by = "date"
+        elif chart_type == "bar":
+            group_by = "speaker"
+        else:  # grouped_bar
+            group_by = "metric"
         
         chart_data = get_chart_data(
             db=session,
             chart_type=chart_type,
             metric=metric,
+            metrics=metrics,
             group_by=group_by,
             filters=filters
         )
@@ -420,13 +422,15 @@ def generate_chart(
         if not chart_data:
             return {"error": "No data available for chart"}
         
+        title_metric = metric if chart_type != "grouped_bar" else ", ".join(metrics or [])
+        x_axis = "Date" if chart_type == "line" else ("Speaker" if chart_type == "bar" else "Metric")
         return {
             "type": chart_type,
             "metric": metric,
             "data": chart_data,
             "config": {
-                "title": METRIC_DISPLAY_NAMES.get(metric, metric),
-                "xAxisLabel": "Date" if chart_type == "line" else "Speaker",
+                "title": metrics_registry.get_metric_display_name(title_metric),
+                "xAxisLabel": x_axis,
                 "yAxisLabel": "Score",
                 "filters": filters
             }
@@ -446,6 +450,21 @@ TOOL_DEFINITIONS = [
                 "type": "object",
                 "properties": {},
                 "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "suggest_metrics",
+            "description": "Suggest relevant metrics for a natural-language question. Returns a ranked list of candidates (aggregates for overall questions, granular for behavior questions).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string", "description": "User's question in natural language"},
+                    "top_n": {"type": "integer", "description": "Max number of metrics to return", "default": 5}
+                },
+                "required": ["question"]
             }
         }
     },
@@ -570,16 +589,26 @@ TOOL_DEFINITIONS = [
                 "properties": {
                     "chart_type": {
                         "type": "string",
-                        "enum": ["line", "bar"],
-                        "description": "Type of chart: 'line' for time trends, 'bar' for speaker comparison"
+                        "enum": ["line", "bar", "grouped_bar"],
+                        "description": "Type of chart: 'line' for time trends, 'bar' for speaker comparison, 'grouped_bar' to compare multiple metrics for one entity"
                     },
                     "metric": {
                         "type": "string",
                         "description": "Metric name (e.g., SAFETY_Score, comm_Pausing)"
                     },
+                    "metrics": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "For grouped_bar: list of metrics to compare"
+                    },
                     "speaker": {
                         "type": "string",
-                        "description": "Optional: Filter by speaker (for line charts) or leave empty to compare all speakers (for bar charts)"
+                        "description": "Optional: Filter by single speaker (for line charts)"
+                    },
+                    "speakers": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional: List of specific speakers to compare (for bar charts). Use this when comparing 2+ specific people. Example: ['Tasha', 'Devon', 'Mike']"
                     },
                     "date_from": {
                         "type": "string",
@@ -590,7 +619,7 @@ TOOL_DEFINITIONS = [
                         "description": "Optional: End date YYYY-MM-DD"
                     }
                 },
-                "required": ["chart_type", "metric"]
+                "required": ["chart_type"]
             }
         }
     }
@@ -601,8 +630,91 @@ TOOL_DEFINITIONS = [
 TOOL_FUNCTIONS = {
     "list_speakers": list_speakers,
     "list_metrics": list_metrics,
+    "suggest_metrics": lambda **kwargs: suggest_metrics(**kwargs),
     "search_utterances": search_utterances,
     "get_metric_stats": get_metric_stats,
     "compare_periods": compare_periods,
     "generate_chart": generate_chart,
 }
+
+
+def suggest_metrics(question: str, top_n: int = 5) -> Dict[str, Any]:
+    """
+    Heuristic metric suggester based on keywords and dynamic registry.
+
+    - Aggregate questions → SAFETY_Score, QUALITY_Score, DELIVERY_Score, COST_Score, PEOPLE_Score, Total_Comm_Score, Total_Deviation_Score
+    - Communication/behavior questions → comm_* and feedback_* depending on keywords
+    - Safety/Quality/Delivery/Cost/People keywords map to corresponding aggregates
+    """
+    q = (question or "").lower()
+    all_metrics = metrics_registry.get_available_metrics()
+    disp = metrics_registry.get_metric_display_name
+
+    # Seed candidate sets
+    agg_pref = [
+        "PEOPLE_Score", "SAFETY_Score", "QUALITY_Score", "DELIVERY_Score", "COST_Score",
+        "Total_Comm_Score", "Total_Deviation_Score",
+    ]
+
+    # Keyword → aggregates
+    if any(k in q for k in ["overall", "aggregate", "summary", "performance", "trend", "improved", "change over time"]):
+        cands = [m for m in agg_pref if m in all_metrics or m in AGGREGATED_METRICS]
+    else:
+        cands = []
+
+    # Domain keywords
+    if "safety" in q:
+        cands.insert(0, "SAFETY_Score")
+    if "quality" in q:
+        cands.insert(0, "QUALITY_Score")
+    if any(k in q for k in ["delivery", "on-time", "schedule"]):
+        cands.insert(0, "DELIVERY_Score")
+    if "cost" in q:
+        cands.insert(0, "COST_Score")
+    if any(k in q for k in ["people", "behavior", "engagement", "communication", "comm", "talking", "conversation"]):
+        cands.insert(0, "PEOPLE_Score")
+        cands.append("Total_Comm_Score")
+
+    # Behavior-specific keywords → granular comm_*
+    granular_additions: List[str] = []
+    def add_if_exists(key: str):
+        if key in all_metrics:
+            granular_additions.append(key)
+
+    if any(k in q for k in ["clarify", "clarifying", "question", "questions"]):
+        add_if_exists("comm_Clarifying_Questions")
+        add_if_exists("comm_Probing_Questions")
+    if any(k in q for k in ["probe", "probing"]):
+        add_if_exists("comm_Probing_Questions")
+    if any(k in q for k in ["open-ended", "open ended"]):
+        add_if_exists("comm_Open_Ended_Questions")
+    if any(k in q for k in ["coach", "coaching"]):
+        add_if_exists("comm_Coaching_Questions")
+    if any(k in q for k in ["pause", "pausing"]):
+        add_if_exists("comm_Pausing")
+    if any(k in q for k in ["affirm", "affirmation"]):
+        add_if_exists("comm_Verbal_Affirmation")
+    if any(k in q for k in ["feedback"]):
+        for k in all_metrics:
+            if k.startswith("feedback_"):
+                granular_additions.append(k)
+
+    # Deduplicate while preserving order
+    seen = set()
+    ordered = []
+    for m in cands + granular_additions:
+        if m not in seen:
+            seen.add(m)
+            ordered.append(m)
+
+    # Fallback if empty: default to commonly useful aggregates
+    if not ordered:
+        ordered = [m for m in agg_pref if m in all_metrics or m in AGGREGATED_METRICS]
+
+    ordered = ordered[: max(1, top_n)]
+    return {
+        "candidates": [
+            {"metric": m, "display_name": disp(m), "aggregated": bool(m in AGGREGATED_METRICS)}
+            for m in ordered
+        ]
+    }

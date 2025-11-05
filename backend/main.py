@@ -36,8 +36,6 @@ CONFIG_PATH = os.getenv('CONFIG_PATH', 'backend/config/metric_groups.json')
 SA_MODEL_PATH = os.getenv('SA_MODEL_PATH', 'bert_classification/sa_bert_model_multilabel/')
 ARQ_REDIS_URL = os.getenv("ARQ_REDIS_URL", "redis://localhost:6379")
 
-# --- Application State ---
-ml_models = {}
 
 # --- Database Dependency ---
 def get_db():
@@ -76,7 +74,6 @@ async def lifespan(app: FastAPI):
     
     print("Closing application resources...")
     await app.state.arq_pool.close()
-    ml_models.clear()
 
 # --- FastAPI App Initialization ---
 app = FastAPI(lifespan=lifespan)
@@ -95,6 +92,23 @@ app.add_middleware(
 # --- Dependency for Arq Pool ---
 async def get_arq_pool(request: Request):
     return request.app.state.arq_pool
+
+# Simple health check
+@app.get("/healthz")
+def healthz(db: Session = Depends(get_db)):
+    from sqlalchemy import text as sa_text
+    ok = {"status": "ok", "db": False, "redis": False}
+    try:
+        db.execute(sa_text("SELECT 1"))
+        ok["db"] = True
+    except Exception:
+        ok["db"] = False
+    try:
+        r = redis.from_url(ARQ_REDIS_URL)
+        ok["redis"] = bool(r.ping())
+    except Exception:
+        ok["redis"] = False
+    return ok
 
 # --- API Endpoints ---
 @app.post("/analyze_text/", response_model=AsyncTask)

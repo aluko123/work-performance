@@ -11,9 +11,11 @@ from openai import AsyncOpenAI
 
 from .tools import TOOL_DEFINITIONS, TOOL_FUNCTIONS
 from .metadata import get_corpus_metadata
+from . import metrics as metrics_registry
 
 # Initialize
 client = AsyncOpenAI()
+GPT_MODEL = os.getenv("GPT_MODEL", "gpt-4o-mini")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
 
@@ -54,20 +56,31 @@ def build_system_prompt() -> str:
     
     speaker_list = ", ".join(speakers) if speakers else "various team members"
     
+    # Build dynamic metric lists for the prompt (keep concise)
+    cats = metrics_registry.split_metrics()
+    agg_list = ", ".join(cats.get("aggregated", [])[:10]) or "SAFETY_Score, QUALITY_Score, DELIVERY_Score, COST_Score, PEOPLE_Score"
+    gran_list = ", ".join(cats.get("granular", [])[:20]) or "comm_Clarifying_Questions, comm_Pausing, feedback_Timely, ..."
+
     return f"""You are a performance insights advisor for shop floor communication analysis.
 
 {temporal_guidance}
 **Team:** {speaker_list}
 
 **Available metrics:**
-- SAFETY_Score, QUALITY_Score, DELIVERY_Score, COST_Score, PEOPLE_Score (0-50 scale)
-- comm_Pausing, comm_Clarifying_Questions, comm_Verbal_Affirmation (1-5 scale)
+- Aggregates: {agg_list}
+- Behaviors (sample): {gran_list}
+- Use the list_metrics tool to browse the full set with human-friendly names.
 
 **How to answer:**
 - **IMPORTANT:** If unsure about a speaker's name, use **list_speakers** first to check availability
 - **When users ask "what did X say" or "what was discussed"**, ALWAYS use **search_utterances** to find actual quotes
+- When selecting metrics, use **suggest_metrics** to pick the most relevant ones
 - Use **get_metric_stats** for current stats (can filter by speaker/dates)
 - Use **compare_periods** for temporal questions (use the periods above)
+
+**Aggregates vs. Behaviors:**
+- For aggregate or overall questions (e.g., "overall performance/safety/quality/people"), favor aggregate metrics (e.g., SAFETY_Score, QUALITY_Score, PEOPLE_Score).
+- For behavior/communication questions, select the most relevant behavior metrics and you may combine multiple metrics (e.g., comm_Clarifying_Questions + comm_Probing_Questions). Use grouped_bar charts to compare multiple metrics.
 
 **Metric Inference:**
 When users don't specify a metric:
@@ -88,6 +101,8 @@ You MUST generate a chart for every trend/comparison question. This is non-negot
    - Step 2 (REQUIRED): Call generate_chart(chart_type="bar", metric=X)
    - Example: "Compare A and B on safety" → get_metric_stats(SAFETY_Score, A), get_metric_stats(SAFETY_Score, B), then generate_chart(bar, SAFETY_Score)
    - Never finish a comparison without calling generate_chart
+3. **Multi-metric comparisons** ("compare multiple behaviors"):
+   - Use generate_chart(chart_type="grouped_bar", metrics=[M1, M2, ...], speaker=Y if specified)
 
 **Citations - REQUIRED:**
 For questions about specific speakers ("Tasha's behavior", "what Rosa said"):
@@ -143,7 +158,7 @@ async def run_agent(
         # Call OpenAI with tools
         try:
             response = await client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=GPT_MODEL,
                 messages=clean_messages,
                 tools=TOOL_DEFINITIONS,
                 temperature=0.2,  # Lower temp for more consistent, deterministic responses
@@ -201,6 +216,7 @@ async def run_agent(
             called_tools = set()
             metric_used = None
             speakers_queried = []
+            trend_speakers = []  # Track speakers for trend queries
             
             for tool_call in tool_calls_list:
                 func_name = tool_call["function"]["name"]
@@ -214,6 +230,9 @@ async def run_agent(
                         speakers_queried.append(func_args["speaker"])
                 elif func_name == "compare_periods":
                     metric_used = func_args.get("metric")
+                    # Track speakers for trend line charts (supports multiple)
+                    if "speaker" in func_args:
+                        trend_speakers.append(func_args["speaker"])
                 
                 # Execute tool
                 yield {"type": "status", "message": f"📊 Fetching {func_name}..."}
@@ -249,7 +268,12 @@ async def run_agent(
             elif "compare_periods" in called_tools:
                 should_have_chart = True
                 chart_type = "line"
-                chart_reason = f"trend analysis for {metric_used}"
+                if trend_speakers:
+                    speaker_count = len(trend_speakers)
+                    speaker_msg = f" for {speaker_count} speaker{'s' if speaker_count > 1 else ''}"
+                else:
+                    speaker_msg = ""
+                chart_reason = f"trend analysis for {metric_used}{speaker_msg}"
             
             # Auto-inject chart if needed and not already called
             if should_have_chart and "generate_chart" not in called_tools and metric_used:
@@ -258,8 +282,19 @@ async def run_agent(
                 
                 # Build chart arguments
                 chart_args = {"chart_type": chart_type, "metric": metric_used}
-                if speakers_queried:
+                
+                # For bar charts (comparisons), pass the specific speakers being compared
+                if chart_type == "bar" and speakers_queried:
                     chart_args["speakers"] = speakers_queried
+                
+                # For line charts (trends), pass speaker filter(s)
+                if chart_type == "line" and trend_speakers:
+                    if len(trend_speakers) == 1:
+                        # Single speaker - use speaker filter
+                        chart_args["speaker"] = trend_speakers[0]
+                    else:
+                        # Multiple speakers - use speakers list to show all on same chart
+                        chart_args["speakers"] = trend_speakers
                 
                 # Execute chart generation
                 chart_result = TOOL_FUNCTIONS["generate_chart"](**chart_args)

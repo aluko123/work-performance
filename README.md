@@ -14,12 +14,12 @@ graph TD
         BackendApi("FastAPI Backend")
         DocExtractor("Document Extractor")
         AnalysisEngine("Analysis Engine")
-        RAG_Pipeline("RAG Pipeline")
+    RAG_Pipeline("Assistant Tools")
     end
 
     subgraph Data & Models
         Database("SQL Database")
-        VectorStore("Vector Store (ChromaDB)")
+    VectorStore("Vector Search (pgvector)")
         BertModel("Multi-Task BERT Model")
         SAModel("SA Model")
         TrainingScripts("Offline Training Scripts")
@@ -42,12 +42,12 @@ graph TD
     AnalysisEngine -- 8. Scores Utterances with --> BertModel
     AnalysisEngine -- " " --> SAModel
     AnalysisEngine -- 9. Saves Results --> Database
-    Database -- 10. Indexes Utterances --> VectorStore
+    Database -- 10. Indexes Utterances --> Vector Search
 
     %% RAG Query Flow
     User -- 11. Asks Question --> Frontend
-    Frontend -- 12. POST /api/get_insights --> BackendApi
-    BackendApi -- 13. Sends Query to --> RAG_Pipeline
+    Frontend -- 12. POST /api/chat --> BackendApi
+    BackendApi -- 13. Uses Tools (search/stats/charts) --> RAG_Pipeline
     RAG_Pipeline -- 14. Retrieves Context from --> VectorStore
     RAG_Pipeline -- 15. Generates Answer with --> OpenAI_LLM
     OpenAI_LLM -- 16. Streams Answer --> RAG_Pipeline
@@ -123,8 +123,7 @@ graph TD
      analysis job.
    - GET /analyses/{analysis_id}: Retrieves the results of a 
      specific analysis.
-   - POST /api/get_insights: Sends a query to the RAG pipeline 
-     and streams the response.
+   - POST /api/chat: Sends a query to the assistant and streams the response.
 
   3. Backend
 
@@ -143,8 +142,7 @@ graph TD
    - GET /analyses/{analysis_id}: Returns the detailed results 
      of a single analysis.
    - GET /api/trends: Provides trend data for specific metrics.
-   - POST /api/get_insights: The main endpoint for the RAG 
-     pipeline, which streams answers to user queries.
+   - POST /api/chat: Streaming assistant endpoint for user queries.
 
   4. Asynchronous Task Processing
 
@@ -163,24 +161,20 @@ graph TD
       to score utterances on various metrics.
    3. Database Storage: Saves the analysis results to the 
       database.
-   4. Indexing: Indexes the utterances in the Chroma vector store 
-      for the RAG pipeline.
+  4. Indexing: Generates embeddings in Postgres (pgvector) for semantic search.
 
-  5. RAG Pipeline
+  5. Assistant Tools
 
-  The RAG pipeline is the core of the platform's insights 
-  generation capabilities. It uses a combination of retrieval 
-  and generation to answer user questions about the analyzed 
-  data. The pipeline is implemented using langgraph and 
-  consists of the following steps:
+  The assistant uses retrieval and simple tools (function calls) to answer 
+  questions about the analyzed data. Tools include: list_speakers, list_metrics, 
+  suggest_metrics, search_utterances (pgvector), get_metric_stats, compare_periods, generate_chart.
 
    1. Load History: Loads the conversation history from Redis to 
       provide context for the current query.
    2. Classify Query: Classifies the user's query to determine 
       the type of analysis required (e.g., trend analysis, 
       comparison, root cause analysis).
-   3. Retrieve Docs: Retrieves relevant documents (utterances) 
-      from the Chroma vector store based on the user's query.
+   3. Retrieve Utterances: Retrieves relevant utterances via pgvector.
    4. Compute Aggregates: Computes aggregate metrics from the 
       retrieved documents to provide a quantitative summary.
    5. Generate Draft: Generates a draft answer using a large 
@@ -237,11 +231,11 @@ This section expands the high-level design with implementation-level details, ma
 
 - Components
   - `frontend-v2/`: React + Vite App for uploading files, viewing analyses, and chatting with the RAG assistant. `frontend/` contains an earlier static prototype.
-  - `backend/`: FastAPI app exposing REST APIs; background jobs via `arq`; RAG using LangChain + Chroma; SQLite by default.
-  - `data/`: SQLite database (`data/analysis.db`) and Chroma persistence (`data/chroma_db/`). Large models/data are mounted here in Docker.
+  - `backend/`: FastAPI app exposing REST APIs; background jobs via `arq`; OpenAI-native assistant with tools; SQLite by default.
+  - `data/`: SQLite database (`data/analysis.db`). Large models/data are mounted here in Docker.
 
 - Startup wiring (API):
-  - `backend/main.py:51` defines `lifespan` to initialize the DB, create an ARQ Redis pool, enqueue `startup_indexing_task`, and attach a `RAGGraph` instance to `app.state`.
+  - `backend/main.py:51` defines `lifespan` to initialize the DB, create an ARQ Redis pool, and enqueue `startup_indexing_task`.
   - CORS origins come from `CORS_ORIGINS`; defaults allow local dev at port 8001.
 
 ### Frontend (React SPA)
@@ -259,14 +253,14 @@ This section expands the high-level design with implementation-level details, ma
 - RAG Assistant (Streaming)
   - Chat UI in `frontend-v2/src/components/RAGQuery.tsx`.
   - Generates/persists `session_id` in `localStorage` for conversation continuity.
-  - `POST /api/get_insights` with `{ question, session_id }`; consumes Server-Sent Events (SSE):
+  - `POST /api/chat` with `{ question, session_id }`; consumes Server-Sent Events (SSE):
     - Interim tokens arrive as `data: {"answer_token": "..."}` and are appended live.
     - Final message is a JSON object containing `bullets`, `metrics_summary`, `follow_ups`, `citations`, etc., used to enrich the UI and show follow-up buttons.
 
 ### Backend API (FastAPI)
 
 - Initialization & CORS
-  - `backend/main.py:51-88` initializes DB, ARQ pool, enqueues `startup_indexing_task`, and creates `RAGGraph`.
+  - `backend/main.py:51-88` initializes DB, ARQ pool, enqueues `startup_indexing_task`.
   - `backend/main.py:92-101` configures CORS (origins from `CORS_ORIGINS`).
 
 - Endpoints
@@ -274,7 +268,7 @@ This section expands the high-level design with implementation-level details, ma
   - `GET /analysis_status/{job_id}` → checks Redis for `job_result:{job_id}` and normalizes output; if done, includes `analysis_id` (see `backend/main.py:116-197`).
   - `GET /analyses/` and `GET /analyses/{analysis_id}` → list or fetch analyses with nested utterances.
   - `GET /api/trends?metric=...&period=daily|weekly` → aggregates over JSON columns to produce chart-ready data.
-  - `POST /api/get_insights` → streams interim answer tokens and finally a structured payload for the RAG result (see `backend/main.py:214-236`).
+  - `POST /api/chat` → streams interim answer tokens and structured chunks (bullets, citations, charts), then a final payload.
 
 ### Asynchronous Processing (ARQ Worker)
 
@@ -295,8 +289,7 @@ This section expands the high-level design with implementation-level details, ma
      - Enqueue `index_utterances_task` with new utterance IDs; persist `{status, analysis_id}` to Redis under `job_result:{corr_id}` for the API to poll.
 
 - `index_utterances_task` — `backend/worker.py:120`
-  - Load utterances by IDs; convert to LangChain `Document`s with rich page content (speaker/date/timestamp + scores inline).
-  - Add to Chroma in batches (size from `BATCH_SIZE`), then `persist()`; mark `is_indexed=True` in DB.
+  - Generate OpenAI embeddings and store them in Postgres pgvector; mark `is_indexed=True` in DB.
 
 - `startup_indexing_task` — `backend/worker.py:160`
   - On API startup, enqueue indexing for any historic utterances where `is_indexed == False` (safe backfill).
@@ -327,24 +320,13 @@ This section expands the high-level design with implementation-level details, ma
   - Computes average scores grouped by speaker and period using SQL over JSON columns; supports either raw `predictions[metric]` or `aggregated_scores[metric]`.
   - Shapes output for charting libraries: `labels` (periods) + `datasets[{ label: speaker, data: [...] }]`.
 
-### RAG Pipeline (LangGraph + Chroma)
+### Assistant (Tools)
 
 - Vector store & retriever
-  - Chroma persisted at `./data/chroma_db`; embeddings via `OpenAIEmbeddings`.
-  - Retriever uses MMR with `k=8`/`fetch_k=40` for diverse, relevant contexts.
+  - pgvector embeddings stored in Postgres; cosine similarity search.
 
-- Graph nodes (see `backend/rag_graph.py`)
-  - `load_history` → load last turns from Redis using `session_id` (opt-in continuity).
-  - `classify` → rule-based query type classification (`facts`, `performance_trend`, `compare_entities`, `root_cause`).
-  - `retrieve` → fetch docs from Chroma; apply `top_k` cap.
-  - `aggregate` → DB query over `Utterance` with optional filters (`speaker`, `date_from`, `date_to`); compute per-metric averages and sample size.
-  - `draft` → build prompt with question, aggregates, and references; JSON-mode LLM returns a draft structure.
-  - `format` → validate/sanitize `metrics_summary`, resolve `source_ids` to final citations, attach metadata (e.g., data quality from sample size).
-  - `save_history` → append Q/A to Redis history for conversational continuity.
-
-- Streaming execution (`astream_run`)
-  - Runs pre-nodes, then streams narrative `answer` as tokens.
-  - Performs a second JSON-mode call to produce `bullets`, `metrics_summary`, `follow_ups`, `source_ids`; merges and yields final payload.
+  - Tools in `backend/tools.py`: list_speakers, list_metrics (dynamic), search_utterances, get_metric_stats, compare_periods, generate_chart (line/bar/grouped_bar)
+  - The agent enforces chart generation for trends/comparisons and streams answer tokens + structured chunks via SSE.
 
 ### Configuration & Secrets
 
@@ -361,11 +343,11 @@ This section expands the high-level design with implementation-level details, ma
   1) User uploads file via `FileUpload` → `POST /analyze_text/` returns `job_id`.
   2) Worker extracts utterances (Unstructured + Chunkr/LLM) → analyzes with multi-task BERT + SA → computes aggregates.
   3) Results saved as `Analysis` + `Utterance`s → Redis `job_result:{job_id}` is set.
-  4) Indexing task embeds utterances and persists Chroma; marks `is_indexed=true`.
+  4) Indexing task embeds utterances into pgvector; marks `is_indexed=true`.
   5) Frontend polls `/analysis_status/{job_id}` → fetches `/analyses/{analysis_id}` for display.
 
 - RAG Query (Streaming)
-  1) Frontend submits `{ question, session_id }` to `/api/get_insights`.
+  1) Frontend submits `{ question, session_id }` to `/api/chat`.
   2) API streams `answer_token` chunks while composing final metadata.
   3) Final payload returns `bullets`, `metrics_summary`, `follow_ups`, and `citations`; UI renders follow-ups as buttons.
 
