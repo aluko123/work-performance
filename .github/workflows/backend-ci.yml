@@ -11,6 +11,11 @@ jobs:
     name: Python tests (backend)
     runs-on: ubuntu-latest
     
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg2://testuser:testpass@localhost:5432/testdb
+      DATABASE_URL: postgresql+psycopg2://testuser:testpass@localhost:5432/testdb
+      PYTHONPATH: .
+    
     services:
       postgres:
         image: pgvector/pgvector:pg15
@@ -42,28 +47,23 @@ jobs:
           pip install -r requirements.txt
       
       - name: Run database migrations
-        env:
-          DATABASE_URL: postgresql+psycopg2://testuser:testpass@localhost:5432/testdb
         run: |
           alembic upgrade head
 
+      - name: Debug environment
+        run: |
+          echo "TEST_DATABASE_URL=${TEST_DATABASE_URL}"
+          python -c "import os; print('Python sees:', os.getenv('TEST_DATABASE_URL'))"
+      
       - name: Run unit tests
         env:
-          PYTHONPATH: .
-          TEST_DATABASE_URL: postgresql+psycopg2://testuser:testpass@localhost:5432/testdb
-          DATABASE_URL: postgresql+psycopg2://testuser:testpass@localhost:5432/testdb
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CHUNKRAI_API_KEY: ${{ secrets.CHUNKRAI_API_KEY }}
         run: |
-          export TEST_DATABASE_URL=postgresql+psycopg2://testuser:testpass@localhost:5432/testdb
           pytest -v backend/tests
 
       - name: Report coverage (text)
         if: always()
-        env:
-          PYTHONPATH: .
-          TEST_DATABASE_URL: postgresql+psycopg2://testuser:testpass@localhost:5432/testdb
-          DATABASE_URL: postgresql+psycopg2://testuser:testpass@localhost:5432/testdb
         run: |
           pytest -q --cov=backend --cov-report=term-missing backend/tests || true
 
