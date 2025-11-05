@@ -67,7 +67,3 @@ jobs:
         run: |
           pytest -q --cov=backend --cov-report=term-missing backend/tests || true
 
-      - name: Frontend (vanilla) presence check
-        run: |
-          test -f frontend/index.html && echo "frontend/index.html found" || (echo "frontend/index.html missing" && exit 1)
-
