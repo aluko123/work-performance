@@ -7,6 +7,7 @@ from sqlalchemy import func, cast, JSON
 from sqlalchemy.sql.expression import case
 from . import db_models
 from .config.chart_config import CHART_CACHE_SIZE, CHART_MAX_DATA_POINTS, METRIC_DISPLAY_NAMES
+from .database import SQLALCHEMY_DATABASE_URL
 
 
 def predict_all_scores_batch(texts: List[str], model, tokenizer, metric_cols: List[str]) -> List[Dict[str, int]]:
@@ -220,10 +221,15 @@ def get_speaker_trends(db: Session, metric: str, period: str):
     # Clean the metric name by removing '.1' suffix
     cleaned_metric = metric.replace('.1', '')
 
-    if period == 'daily':
-        date_trunc_func = func.date(db_models.Utterance.date)
-    else: # weekly
-        date_trunc_func = func.strftime('%Y-%W', db_models.Utterance.date)
+    # Postgres-only period expression
+    def _period_expr(period: str):
+        if period == 'daily':
+            return func.to_date(db_models.Utterance.date, 'YYYY-MM-DD')
+        else:  # weekly
+            # ISO year-week (e.g., 2024-36)
+            return func.to_char(func.to_date(db_models.Utterance.date, 'YYYY-MM-DD'), 'IYYY-IW')
+
+    date_trunc_func = _period_expr(period)
 
     metric_value = case(
         (db_models.Utterance.predictions[cleaned_metric] != None, db_models.Utterance.predictions[cleaned_metric].as_float()),
@@ -248,7 +254,8 @@ def get_speaker_trends(db: Session, metric: str, period: str):
     # Restructure data for Chart.js
     periods = set([res.period for res in results])
     periods.discard(None) # Safely remove None from the set
-    labels = sorted(list(periods))
+    # Convert datetime.date objects to strings
+    labels = sorted([str(p) for p in periods])
 
     speakers = sorted(list(set([res.speaker for res in results])))
     datasets = []
@@ -335,7 +342,10 @@ def get_chart_data(
     query = db.query(db_models.Utterance).join(db_models.Analysis)
     
     # Apply filters
-    if filters.get('speaker'):
+    if filters.get('speakers'):
+        # Filter to specific list of speakers (for comparisons)
+        query = query.filter(db_models.Utterance.speaker.in_(filters['speakers']))
+    elif filters.get('speaker'):
         query = query.filter(db_models.Utterance.speaker == filters['speaker'])
     if filters.get('date_from'):
         query = query.filter(db_models.Utterance.date >= filters['date_from'])
@@ -351,7 +361,7 @@ def get_chart_data(
     # Execute based on group_by
     if group_by == "date":
         # Time series data
-        date_trunc_func = func.date(db_models.Utterance.date)
+        date_trunc_func = func.to_date(db_models.Utterance.date, 'YYYY-MM-DD')
         
         # Choose the right column based on metric level and metric name
         # Check if this specific metric is aggregated (ends with _Score or starts with Total_/Feedback_)
@@ -376,39 +386,78 @@ def get_chart_data(
                 else_=None
             )
         
-        results = query.with_entities(
-            date_trunc_func.label('period'),
-            func.avg(metric_value).label('average_score')
-        ).group_by(date_trunc_func).order_by(date_trunc_func).all()
-        
-        if not results:
-            print(f"📊 No results returned for metric={metric}, level={level}")
-            return None
-        
-        labels = [str(res.period) for res in results]
-        data = [res.average_score for res in results]
-        
-        print(f"📊 Chart data: {len(labels)} points, first 3: {list(zip(labels[:3], data[:3]))}")
-        
-        # Sample if too many points
-        if len(labels) > max_points:
-            sampled_indices = [0]
-            step = len(labels) / (max_points - 1)
-            for i in range(1, max_points - 1):
-                sampled_indices.append(int(i * step))
-            sampled_indices.append(len(labels) - 1)
+        # Check if we're filtering to specific speakers (multi-speaker line chart)
+        if filters.get('speakers') and len(filters['speakers']) > 1:
+            # Group by both date and speaker to show multiple lines
+            results = query.with_entities(
+                date_trunc_func.label('period'),
+                db_models.Utterance.speaker,
+                func.avg(metric_value).label('average_score')
+            ).group_by(date_trunc_func, db_models.Utterance.speaker).order_by(date_trunc_func).all()
             
-            labels = [labels[i] for i in sampled_indices]
-            data = [data[i] for i in sampled_indices]
+            if not results:
+                print(f"📊 No results returned for metric={metric}, speakers={filters['speakers']}")
+                return None
+            
+            # Build labels (unique dates) and datasets (one per speaker)
+            all_dates = sorted(list(set([str(res.period) for res in results])))
+            speakers = sorted(list(set([res.speaker for res in results])))
+            
+            datasets = []
+            for speaker in speakers:
+                speaker_data = []
+                for date in all_dates:
+                    # Find the score for this speaker on this date
+                    matching = [res for res in results if str(res.period) == date and res.speaker == speaker]
+                    speaker_data.append(matching[0].average_score if matching else None)
+                
+                datasets.append({
+                    "name": speaker,
+                    "data": speaker_data
+                })
+            
+            result = {
+                "labels": all_dates,
+                "datasets": datasets
+            }
+            print(f"📊 Multi-speaker chart: {len(all_dates)} dates, {len(speakers)} speakers")
+        else:
+            # Single speaker or no speaker filter - original logic
+            results = query.with_entities(
+                date_trunc_func.label('period'),
+                func.avg(metric_value).label('average_score')
+            ).group_by(date_trunc_func).order_by(date_trunc_func).all()
+            
+            if not results:
+                print(f"📊 No results returned for metric={metric}, level={level}")
+                return None
+            
+            labels = [str(res.period) for res in results]
+            data = [res.average_score for res in results]
+            
+            print(f"📊 Chart data: {len(labels)} points, first 3: {list(zip(labels[:3], data[:3]))}")
+            
+            # Sample if too many points
+            if len(labels) > max_points:
+                sampled_indices = [0]
+                step = len(labels) / (max_points - 1)
+                for i in range(1, max_points - 1):
+                    sampled_indices.append(int(i * step))
+                sampled_indices.append(len(labels) - 1)
+                
+                labels = [labels[i] for i in sampled_indices]
+                data = [data[i] for i in sampled_indices]
+            
+            result = {
+                "labels": labels,
+                "datasets": [{
+                    "name": METRIC_DISPLAY_NAMES.get(metric, metric),
+                    "data": data
+                }]
+            }
+            print(f"📊 Returning chart data: {len(labels)} labels, {len(result['datasets'])} dataset(s)")
         
-        result = {
-            "labels": labels,
-            "datasets": [{
-                "name": METRIC_DISPLAY_NAMES.get(metric, metric),
-                "data": data
-            }]
-        }
-        print(f"📊 Returning chart data: {len(labels)} labels, {len(data)} data points, sample: {data[:3]}")
+        print(f"📊 Final result: {len(result['labels'])} labels, {len(result['datasets'])} dataset(s)")
         return result
     
     elif group_by == "speaker":

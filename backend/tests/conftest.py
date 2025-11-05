@@ -1,31 +1,51 @@
 import os
 import tempfile
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from backend.database import Base
+from backend import db_models
 
 
 @pytest.fixture()
 def temp_db_session():
     """
-    Creates a temporary SQLite database and returns a Session factory bound to it.
-    Tables are created from backend.database.Base metadata.
+    Postgres-only test database session factory with table truncation.
+    Uses TEST_DATABASE_URL or DATABASE_URL, otherwise defaults to docker-compose DSN.
+    Truncates tables before each test for isolation.
     """
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    url = f"sqlite:///{path}"
-    engine = create_engine(url, connect_args={"check_same_thread": False})
+    pg_url = (
+        os.getenv("TEST_DATABASE_URL")
+        or "postgresql+psycopg2://workperf:%s@postgres:5432/performance" % os.getenv("DB_PASSWORD", "devpassword")
+    )
+
+    engine = create_engine(pg_url)
+    # connectivity check
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception as e:
+        raise RuntimeError(
+            f"Postgres is required for tests. Could not connect to {pg_url}. Error: {e}"
+        )
+
     Base.metadata.create_all(bind=engine)
+    
+    # Truncate tables for test isolation
+    with engine.connect() as conn:
+        conn.execute(text("TRUNCATE TABLE utterances, analyses RESTART IDENTITY CASCADE"))
+        conn.commit()
+    
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    
     try:
         yield SessionLocal
     finally:
-        try:
-            os.remove(path)
-        except FileNotFoundError:
-            pass
+        # Clean up after test
+        with engine.connect() as conn:
+            conn.execute(text("TRUNCATE TABLE utterances, analyses RESTART IDENTITY CASCADE"))
+            conn.commit()
 
 
 class FakeRedis:
@@ -42,4 +62,3 @@ class FakeRedis:
 @pytest.fixture()
 def fake_redis_client():
     return FakeRedis()
-

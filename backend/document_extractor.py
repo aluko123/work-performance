@@ -19,6 +19,7 @@ class RobustMeetingExtractor:
     def __init__(self, chunkr_api_key: Optional[str], openai_client: AsyncOpenAI):
         self.llm_client = openai_client
         self.max_tokens_per_llm_call = 2000
+        self.gpt_model = os.getenv("GPT_MODEL", "gpt-4o-mini")
         if chunkr_api_key:
             self.chunkr = Chunkr(api_key=chunkr_api_key)
             print("Chunkr client initialized.")
@@ -85,7 +86,7 @@ class RobustMeetingExtractor:
         prompt = global_date_user_prompt(header_text)
         try:
             response = await self.llm_client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=self.gpt_model,
                 messages=[
                     {"role": "system", "content": system_date_expert()},
                     {"role": "user", "content": prompt},
@@ -143,7 +144,7 @@ class RobustMeetingExtractor:
         for attempt in range(max_retries):
             try:
                 response = await self.llm_client.chat.completions.create(
-                    model="gpt-4o-mini",
+                    model=self.gpt_model,
                     messages=[
                         {"role": "system", "content": system_data_extractor()},
                         {"role": "user", "content": prompt},
